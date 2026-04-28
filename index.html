@@ -191,37 +191,64 @@
         const showError = (msg) => {
             console.error("Game Error:", msg);
             const el = document.getElementById('error-box');
-            document.getElementById('error-msg').innerText = msg;
-            el.style.display = 'block';
-            document.getElementById('lobby-status').innerText = msg;
-            document.getElementById('loading-spinner').style.display = 'none';
-            document.getElementById('lobby-controls').classList.remove('hidden');
+            if (el) {
+                document.getElementById('error-msg').innerText = msg;
+                el.style.display = 'block';
+            }
+            const lobbyStatus = document.getElementById('lobby-status');
+            if (lobbyStatus) lobbyStatus.innerText = msg;
+            
+            const spinner = document.getElementById('loading-spinner');
+            if (spinner) spinner.style.display = 'none';
+            
+            const controls = document.getElementById('lobby-controls');
+            if (controls) controls.classList.remove('hidden');
+        };
+
+        const showLobby = () => {
+            const spinner = document.getElementById('loading-spinner');
+            if (spinner) spinner.style.display = 'none';
+            const controls = document.getElementById('lobby-controls');
+            if (controls) controls.classList.remove('hidden');
+            const status = document.getElementById('lobby-status');
+            if (status) status.innerText = "Ready to Play";
         };
 
         // RULE 3: Auth Before Queries
         const initAuth = async () => {
+            // Safety timeout: If auth takes more than 5 seconds, show lobby anyway
+            const timeout = setTimeout(() => {
+                if (!user) showLobby();
+            }, 5000);
+
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
+                } else if (!auth.currentUser) {
                     await signInAnonymously(auth);
+                }
+                
+                // If already signed in
+                if (auth.currentUser) {
+                    user = auth.currentUser;
+                    clearTimeout(timeout);
+                    showLobby();
                 }
             } catch (err) {
                 showError("Auth Failure: " + err.message);
             }
         };
 
-        // Start Auth
-        initAuth();
-
+        // Listen for Auth changes
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
-                document.getElementById('loading-spinner').style.display = 'none';
-                document.getElementById('lobby-controls').classList.remove('hidden');
-                document.getElementById('lobby-status').innerText = "Ready to Play";
+                showLobby();
             }
         });
+
+        // Initialize Auth immediately
+        initAuth();
 
         const boardOps = [
             ['×', null, '÷', null, '-', null, '+', null], [null, '÷', null, '×', null, '+', null, '-'],
@@ -267,7 +294,8 @@
         window.joinGame = async () => {
             const idInput = document.getElementById('join-id').value.trim();
             if (!idInput || !user) {
-                document.getElementById('lobby-status').innerText = "Enter a 4-digit code.";
+                const status = document.getElementById('lobby-status');
+                if (status) status.innerText = "Enter a 4-digit code.";
                 return;
             }
 
