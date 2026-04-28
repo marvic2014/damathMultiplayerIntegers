@@ -100,8 +100,8 @@
                     <span class="text-xs text-slate-500 font-bold">OR JOIN</span>
                     <div class="h-px flex-1 bg-slate-700"></div>
                 </div>
-                <input type="text" id="join-id" placeholder="Enter 4-Digit ID" class="w-full py-4 bg-slate-900 border border-slate-700 rounded-2xl text-center text-xl font-mono tracking-widest outline-none focus:border-blue-500">
-                <button onclick="joinGame()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold uppercase tracking-wider transition-all">Join Match</button>
+                <input type="text" id="join-id" maxlength="4" placeholder="Enter 4-Digit ID" class="w-full py-4 bg-slate-900 border border-slate-700 rounded-2xl text-center text-xl font-mono tracking-widest outline-none focus:border-blue-500">
+                <button id="btn-join" onclick="joinGame()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold uppercase tracking-wider transition-all">Join Match</button>
             </div>
             <p id="lobby-status" class="mt-6 text-sm text-slate-400 h-4"></p>
         </div>
@@ -162,18 +162,12 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyCsauqSlcJ9lVf4dqy9YmWQAZRZ8DQrVBo",
-            authDomain: "damath-ba689.firebaseapp.com",
-            projectId: "damath-ba689",
-            storageBucket: "damath-ba689.firebasestorage.app",
-            messagingSenderId: "37396916011",
-            appId: "1:37396916011:web:1ccbe20b5cbac860f3076e",
-            measurementId: "G-1R8V0ZF5XK"
-        };
+        // Environment Variables
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -196,6 +190,20 @@
             const el = document.getElementById('error-box');
             document.getElementById('error-msg').innerText = msg;
             el.style.display = 'block';
+            document.getElementById('lobby-status').innerText = msg;
+        };
+
+        // RULE 3: Auth Before Queries
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                showError("Auth Failure: " + err.message);
+            }
         };
 
         onAuthStateChanged(auth, (u) => {
@@ -203,8 +211,9 @@
                 user = u;
                 document.getElementById('loading-spinner').style.display = 'none';
                 document.getElementById('lobby-controls').classList.remove('opacity-50', 'pointer-events-none');
+                document.getElementById('lobby-status').innerText = "Logged in as " + user.uid.substring(0, 8);
             } else {
-                signInAnonymously(auth).catch(err => showError("Firebase Auth Error: " + err.message));
+                initAuth();
             }
         });
 
@@ -215,8 +224,11 @@
             ['-', null, '+', null, '×', null, '÷', null], [null, '+', null, '-', null, '÷', null, '×']
         ];
 
+        // Helper for RULE 1: Mandatory Path
+        const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
+
         window.createGame = async () => {
-            if (!user) return showError("Not connected to server yet.");
+            if (!user) return showError("Wait for connection...");
             
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
@@ -225,49 +237,71 @@
             const id = Math.floor(1000 + Math.random() * 9000).toString();
             const initialBoard = generateInitialBoard();
             
-            // Serialize nested arrays to strings to bypass Firestore limitations
             const gameData = {
                 id, 
                 turn: 'blue', 
                 scores: { blue: 0, red: 0 },
                 history: { blue: [], red: [] }, 
-                board: JSON.stringify(initialBoard), // SERIALIZED
+                board: JSON.stringify(initialBoard), 
                 players: { blue: user.uid, red: null },
-                historyStack: JSON.stringify([{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }]), // SERIALIZED
+                historyStack: JSON.stringify([{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }]),
                 status: 'waiting',
                 createdAt: new Date().toISOString()
             };
 
             try {
-                await setDoc(doc(db, 'games', id), gameData);
+                await setDoc(getGameDocRef(id), gameData);
                 startSession(id, 'blue');
             } catch (e) {
                 btn.disabled = false;
                 btn.innerText = "Create New Game";
-                showError("Could not create game: " + e.message);
+                showError("Create Error: " + e.message);
             }
         };
 
         window.joinGame = async () => {
-            const id = document.getElementById('join-id').value;
-            if (!id || !user) return;
+            const idInput = document.getElementById('join-id').value.trim();
+            if (!idInput || !user) {
+                document.getElementById('lobby-status').innerText = "Enter a 4-digit code.";
+                return;
+            }
+
+            const btn = document.getElementById('btn-join');
+            btn.disabled = true;
+            btn.innerText = "Joining...";
+            document.getElementById('lobby-status').innerText = "Searching for room " + idInput + "...";
+
             try {
-                const snap = await getDoc(doc(db, 'games', id));
+                const snap = await getDoc(getGameDocRef(idInput));
                 if (!snap.exists()) {
-                    document.getElementById('lobby-status').innerText = "Game not found.";
+                    document.getElementById('lobby-status').innerText = "Room " + idInput + " not found.";
+                    btn.disabled = false;
+                    btn.innerText = "Join Match";
                     return;
                 }
+
                 const data = snap.data();
                 let role = 'observer';
-                if (data.players.blue === user.uid) role = 'blue';
-                else if (data.players.red === user.uid) role = 'red';
-                else if (!data.players.red) {
+                
+                if (data.players.blue === user.uid) {
+                    role = 'blue';
+                } else if (data.players.red === user.uid) {
                     role = 'red';
-                    await updateDoc(doc(db, 'games', id), { 'players.red': user.uid, status: 'active' });
+                } else if (!data.players.red) {
+                    role = 'red';
+                    await updateDoc(getGameDocRef(idInput), { 
+                        'players.red': user.uid, 
+                        status: 'active' 
+                    });
+                } else {
+                    role = 'observer';
                 }
-                startSession(id, role);
+                
+                startSession(idInput, role);
             } catch (e) {
-                showError("Database Error: " + e.message);
+                btn.disabled = false;
+                btn.innerText = "Join Match";
+                showError("Join Error: " + e.message);
             }
         };
 
@@ -278,9 +312,13 @@
             document.getElementById('game-ui').classList.remove('hidden');
             document.getElementById('display-game-id').innerText = `Room: ${id}`;
             document.getElementById('display-player-role').innerText = `Role: ${role}`;
-            if (role === 'red') document.getElementById('board').classList.add('board-rotated');
             
-            onSnapshot(doc(db, 'games', id), (snap) => {
+            if (role === 'red') {
+                document.getElementById('board').classList.add('board-rotated');
+            }
+            
+            // Standard Firestore Listener with Error Callback
+            onSnapshot(getGameDocRef(id), (snap) => {
                 if (snap.exists()) {
                     syncState(snap.data());
                 }
@@ -300,10 +338,8 @@
         }
 
         function syncState(data) {
-            // Deserialize board and historyStack
             localState.board = typeof data.board === 'string' ? JSON.parse(data.board) : data.board;
             localState.historyStack = typeof data.historyStack === 'string' ? JSON.parse(data.historyStack) : data.historyStack;
-            
             localState.turn = data.turn;
             localState.scores = data.scores;
             localState.history = data.history;
@@ -317,10 +353,9 @@
         }
 
         async function updateRemote() {
-            if (!currentGameId) return;
+            if (!currentGameId || !user) return;
             try {
-                // Serialize board and historyStack before updating
-                await updateDoc(doc(db, 'games', currentGameId), {
+                await updateDoc(getGameDocRef(currentGameId), {
                     board: JSON.stringify(localState.board),
                     turn: localState.turn,
                     scores: localState.scores,
@@ -328,7 +363,7 @@
                     historyStack: JSON.stringify(localState.historyStack)
                 });
             } catch (e) {
-                showError("Failed to update game: " + e.message);
+                showError("Update Remote Error: " + e.message);
             }
         }
 
