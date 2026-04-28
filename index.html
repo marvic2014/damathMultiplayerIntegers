@@ -96,7 +96,7 @@
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
                 <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                 <div class="text-blue-400 font-bold">Connecting to server...</div>
-                <button id="btn-retry-auth" onclick="location.reload()" class="hidden text-xs text-slate-500 underline mt-2">Taking too long? Click to retry</button>
+                <button id="btn-retry-auth" onclick="forceResetLobby()" class="hidden text-xs text-slate-500 underline mt-2">Stuck connecting? Reset Session</button>
             </div>
 
             <div id="lobby-controls" class="space-y-4 hidden">
@@ -124,7 +124,11 @@
 
     <div id="game-ui" class="hidden max-w-7xl w-full flex flex-col items-center">
         <header class="text-center mb-8">
-            <h1 class="text-5xl font-black italic">DA<span class="text-blue-500">MATH</span></h1>
+            <div class="flex justify-between items-center w-full max-w-lg mx-auto mb-4">
+                <button onclick="location.reload()" class="text-[10px] uppercase font-bold text-slate-500 hover:text-white transition-colors">← Leave Game</button>
+                <h1 class="text-5xl font-black italic">DA<span class="text-blue-500">MATH</span></h1>
+                <div class="w-20"></div>
+            </div>
             <div class="flex items-center justify-center gap-4 mt-2">
                 <span id="display-game-id" class="px-3 py-1 bg-slate-800 rounded-full text-[10px] font-mono text-slate-400 border border-slate-700 uppercase">Room: ----</span>
                 <span id="display-player-role" class="px-3 py-1 bg-slate-800 rounded-full text-[10px] font-bold text-yellow-500 border border-slate-700 uppercase">Role: Observer</span>
@@ -165,8 +169,8 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -196,6 +200,10 @@
             if (controls) controls.classList.remove('hidden');
             const status = document.getElementById('lobby-status');
             if (status) status.innerText = "Ready to Play";
+            
+            // Clean up UI state if we're back in lobby
+            document.getElementById('game-ui').classList.add('hidden');
+            document.getElementById('lobby').style.display = 'flex';
         };
 
         const showError = (msg) => {
@@ -206,49 +214,54 @@
                 el.style.display = 'block';
             }
             showLobby();
-            const status = document.getElementById('lobby-status');
-            if (status) status.innerText = msg;
         };
 
-        // Improved Auth Logic
+        // Aggressive Reset for Stuck Sessions
+        window.forceResetLobby = async () => {
+            try {
+                await signOut(auth);
+                location.reload();
+            } catch (e) {
+                location.reload();
+            }
+        };
+
         const initAuth = async () => {
             if (isAuthInitiated) return;
             isAuthInitiated = true;
 
-            // Show retry button after 3 seconds of "Connecting"
             setTimeout(() => {
                 const retryBtn = document.getElementById('btn-retry-auth');
                 if (retryBtn && !user) retryBtn.classList.remove('hidden');
             }, 3000);
 
             try {
-                // 1. Immediate check if already logged in (important for refreshes)
                 if (auth.currentUser) {
                     user = auth.currentUser;
                     showLobby();
                     return;
                 }
 
-                // 2. Try Custom Token or Anonymous
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.warn("Initial auth attempt failed, waiting for state listener...", err);
+                console.warn("Auth retry needed:", err);
             }
         };
 
-        // Listen for Auth changes (Fallback if await doesn't resolve fast enough)
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
                 showLobby();
+            } else {
+                user = null;
+                // If logged out manually, keep showing spinner or prompt for login
             }
         });
 
-        // Run immediately
         initAuth();
 
         const boardOps = [
@@ -274,7 +287,8 @@
                 board: JSON.stringify(initialBoard), 
                 players: { blue: user.uid, red: null },
                 historyStack: JSON.stringify([{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }]),
-                status: 'waiting', createdAt: new Date().toISOString()
+                status: 'active',
+                lastUpdate: serverTimestamp()
             };
 
             try {
@@ -306,12 +320,19 @@
 
                 const data = snap.data();
                 let role = 'observer';
+                
+                // If I am already assigned a seat
                 if (data.players.blue === user.uid) role = 'blue';
                 else if (data.players.red === user.uid) role = 'red';
+                // Otherwise take the open seat
                 else if (!data.players.red) {
                     role = 'red';
-                    await updateDoc(getGameDocRef(idInput), { 'players.red': user.uid, status: 'active' });
+                    await updateDoc(getGameDocRef(idInput), { 
+                        'players.red': user.uid, 
+                        lastUpdate: serverTimestamp() 
+                    });
                 }
+                
                 startSession(idInput, role);
             } catch (e) {
                 btn.disabled = false;
@@ -328,11 +349,18 @@
             document.getElementById('game-ui').classList.remove('hidden');
             document.getElementById('display-game-id').innerText = `Room: ${id}`;
             document.getElementById('display-player-role').innerText = `Role: ${role}`;
-            if (role === 'red') document.getElementById('board').classList.add('board-rotated');
+            
+            const boardEl = document.getElementById('board');
+            if (role === 'red') boardEl.classList.add('board-rotated');
+            else boardEl.classList.remove('board-rotated');
             
             unsubscribeSnapshot = onSnapshot(getGameDocRef(id), (snap) => {
-                if (snap.exists()) syncState(snap.data());
-            }, (err) => showError("Sync Error: " + err.message));
+                if (snap.exists()) {
+                    syncState(snap.data());
+                } else {
+                    showError("Session was closed or deleted.");
+                }
+            }, (err) => showError("Connection lost: " + err.message));
         }
 
         function generateInitialBoard() {
@@ -354,10 +382,16 @@
             localState.scores = data.scores;
             localState.history = data.history;
             localState.players = data.players;
-            if (!localState.moveCompleted) {
+            
+            // If it's not my turn and I'm halfway through a local move, reset it
+            if (localState.turn !== myRole) {
+                localState.moveCompleted = false;
                 localState.selected = null;
                 localState.validMoves = [];
+                localState.pendingTurnCaptures = [];
+                localState.currentTurnTotal = 0;
             }
+            
             render();
         }
 
@@ -369,9 +403,10 @@
                     turn: localState.turn,
                     scores: localState.scores,
                     history: localState.history,
-                    historyStack: JSON.stringify(localState.historyStack)
+                    historyStack: JSON.stringify(localState.historyStack),
+                    lastUpdate: serverTimestamp()
                 });
-            } catch (e) { showError("Update Remote Error: " + e.message); }
+            } catch (e) { showError("Sync Error: " + e.message); }
         }
 
         window.handlePieceClick = (r, c) => {
@@ -423,6 +458,7 @@
             localState.selected = null; localState.validMoves = [];
             localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
             localState.moveCompleted = false; localState.canContinueJumping = false;
+            
             const snap = { 
                 board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
                 turn: localState.turn, scores: {...localState.scores}, 
