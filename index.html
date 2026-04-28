@@ -90,13 +90,17 @@
 
     <!-- LOBBY SCREEN -->
     <div id="lobby">
-        <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center">
+        <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center relative">
+            <div class="absolute top-4 right-4">
+                 <button onclick="forceResetLobby()" class="text-[10px] bg-slate-700 hover:bg-red-900 px-3 py-1 rounded-full font-bold transition-colors">Reset Session</button>
+            </div>
+            
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
             
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
-                <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                 <div class="text-blue-400 font-bold">Connecting to server...</div>
-                <button id="btn-retry-auth" onclick="forceResetLobby()" class="mt-4 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold transition-colors">Stuck? Troubleshoot Connection</button>
+                <p class="text-xs text-slate-500 mt-2 px-4 italic">If this takes more than 10 seconds, click the "Reset Session" button in the top right.</p>
             </div>
 
             <div id="lobby-controls" class="space-y-4 hidden">
@@ -183,7 +187,6 @@
         let myRole = null; 
         let user = null;
         let unsubscribeSnapshot = null;
-        let authHandshakeComplete = false;
 
         let localState = {
             board: [], turn: 'blue', selected: null, validMoves: [],
@@ -194,15 +197,19 @@
         };
 
         const showLobby = () => {
-            document.getElementById('loading-spinner').style.display = 'none';
-            document.getElementById('lobby-controls').classList.remove('hidden');
-            document.getElementById('lobby-status').innerText = "Connected and ready";
+            const spinner = document.getElementById('loading-spinner');
+            const controls = document.getElementById('lobby-controls');
+            const status = document.getElementById('lobby-status');
+            
+            if (spinner) spinner.style.display = 'none';
+            if (controls) controls.classList.remove('hidden');
+            if (status) status.innerText = "Connected and ready";
+            
             document.getElementById('game-ui').classList.add('hidden');
             document.getElementById('lobby').style.display = 'flex';
         };
 
         const showError = (msg) => {
-            console.error("Game Error:", msg);
             const el = document.getElementById('error-box');
             if (el) {
                 document.getElementById('error-msg').innerText = msg;
@@ -211,29 +218,27 @@
             showLobby();
         };
 
-        // Forces a clean slate if auth or DB is acting up
         window.forceResetLobby = async () => {
             try {
                 await signOut(auth);
                 localStorage.clear();
-                location.reload();
+                window.location.reload();
             } catch (e) {
-                location.reload();
+                window.location.reload();
             }
         };
 
         const initAuth = async () => {
-            // Failsafe timer: if we haven't connected in 5 seconds, try anonymous login directly
-            const authTimeout = setTimeout(async () => {
+            // Backup timer to show UI even if auth events miss
+            setTimeout(() => {
                 if (!user) {
-                    console.log("Auth taking too long, forcing anonymous sign-in...");
-                    try {
-                        await signInAnonymously(auth);
-                    } catch(e) {
-                        showError("Failed to establish connection. Please reload.");
+                    console.log("Auth callback delay, checking status...");
+                    if (auth.currentUser) {
+                        user = auth.currentUser;
+                        showLobby();
                     }
                 }
-            }, 5000);
+            }, 3000);
 
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -241,16 +246,16 @@
                 } else {
                     await signInAnonymously(auth);
                 }
-                clearTimeout(authTimeout);
             } catch (err) {
-                console.error("Initial auth failed, will retry anonymously:", err);
+                console.error("Auth failed:", err);
+                // Last ditch effort to show something
+                showLobby();
             }
         };
 
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
-                authHandshakeComplete = true;
                 showLobby();
             }
         });
@@ -267,7 +272,7 @@
         const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
 
         window.createGame = async () => {
-            if (!user) return showError("Auth session not ready.");
+            if (!user) return showError("Connecting...");
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
             btn.innerText = "Creating...";
@@ -290,7 +295,7 @@
             } catch (e) {
                 btn.disabled = false;
                 btn.innerText = "Create New Game";
-                showError("Database Permission Error. Try Troubleshoot button.");
+                showError("Database Error. Try 'Reset Session'.");
             }
         };
 
@@ -351,7 +356,7 @@
                 } else {
                     showError("Game session closed.");
                 }
-            }, (err) => showError("Connection lost: Check your internet."));
+            }, (err) => showError("Connection lost."));
         }
 
         function generateInitialBoard() {
