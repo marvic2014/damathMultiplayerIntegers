@@ -79,6 +79,14 @@
         #lobby { position: fixed; inset: 0; background: #0f172a; z-index: 200; display: flex; align-items: center; justify-content: center; }
         #winner-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 300; display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); }
         .error-overlay { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #ef4444; color: white; padding: 16px 32px; border-radius: 12px; font-weight: bold; z-index: 500; display: none; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); text-align: center; }
+        
+        /* Reset button pulse to show it's clickable */
+        .reset-btn { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center p-4">
@@ -91,17 +99,19 @@
     <!-- LOBBY SCREEN -->
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center relative">
-            <!-- ABSOLUTE TROUBLESHOOT BUTTON -->
-            <div class="absolute top-4 right-4">
-                 <button onclick="forceResetLobby()" class="text-[10px] bg-red-900/50 hover:bg-red-600 text-white px-3 py-1 rounded-full font-bold transition-all border border-red-500/50">RESET SESSION</button>
+            <!-- FORCED RESET BUTTON -->
+            <div class="absolute -top-12 left-0 right-0 flex justify-center">
+                 <button id="master-reset" onclick="forceResetLobby(this)" class="reset-btn text-[11px] bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-black transition-all shadow-lg uppercase tracking-tighter">
+                    Emergency Reset Session
+                 </button>
             </div>
             
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
             
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <div class="text-blue-400 font-bold">Connecting...</div>
-                <p class="text-xs text-slate-500 mt-2 px-4 italic">Stuck? Use the "Reset Session" button in the corner.</p>
+                <div class="text-blue-400 font-bold">Connecting to Server...</div>
+                <p class="text-xs text-slate-500 mt-2 px-4 italic">If this takes more than 10 seconds, click the red button above.</p>
             </div>
 
             <div id="lobby-controls" class="space-y-4 hidden">
@@ -215,16 +225,27 @@
             showLobby();
         };
 
-        // GLOBAL TROUBLESHOOTING TRIGGER
-        window.forceResetLobby = async () => {
-            try {
-                await signOut(auth);
-                localStorage.clear();
-                sessionStorage.clear();
-                window.location.reload();
-            } catch (e) {
-                window.location.reload();
+        // EMERGENCY RESET FUNCTION
+        window.forceResetLobby = (btn) => {
+            if(btn) {
+                btn.innerText = "RESETTING NOW...";
+                btn.style.background = "#000";
             }
+            
+            // 1. Clear everything local
+            localStorage.clear();
+            sessionStorage.clear();
+            
+            // 2. Try to sign out, but don't wait forever
+            try {
+                signOut(auth).catch(() => {});
+            } catch(e) {}
+            
+            // 3. Force reload in 500ms no matter what
+            setTimeout(() => {
+                window.location.href = window.location.href;
+                window.location.reload();
+            }, 500);
         };
 
         onAuthStateChanged(auth, (u) => {
@@ -243,7 +264,6 @@
                 }
             } catch (err) {
                 console.error("Auth error", err);
-                // Fallback to show lobby anyway so UI isn't locked
                 showLobby();
             }
         };
@@ -260,7 +280,7 @@
         const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
 
         window.createGame = async () => {
-            if (!user) return showError("Not authenticated. Reset session.");
+            if (!user) return showError("Not authenticated. Use Emergency Reset.");
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
             btn.innerText = "Creating...";
@@ -507,8 +527,10 @@
             document.getElementById('player-red').classList.toggle('active-turn', localState.turn === 'red');
             ['blue', 'red'].forEach(c => {
                 const hEl = document.getElementById(`history-${c}`);
-                hEl.innerHTML = (localState.history[c] || []).map(item => `<div class="history-item">${item}</div>`).join('');
-                hEl.scrollTop = hEl.scrollHeight;
+                if(hEl) {
+                    hEl.innerHTML = (localState.history[c] || []).map(item => `<div class="history-item">${item}</div>`).join('');
+                    hEl.scrollTop = hEl.scrollHeight;
+                }
             });
             const status = document.getElementById('last-op');
             if (localState.turn === myRole) {
