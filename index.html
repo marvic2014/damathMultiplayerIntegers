@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Damath - Multiplayer Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --board-dark: #064e3b; 
+            --board-light: #f1f5f9;
+        }
+        .game-container {
+            display: grid;
+            grid-template-columns: 240px 1fr 240px;
+            gap: 24px;
+            align-items: start;
+            width: 100%;
+            max-width: 1300px;
+        }
+        @media (max-width: 1024px) {
+            .game-container {
+                grid-template-columns: 1fr;
+            }
+            .score-sidebar { order: 2; }
+            .board-section { order: 1; }
+        }
+        .checker-board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            aspect-ratio: 1 / 1;
+            width: 100%;
+            border: 10px solid #334155;
+            user-select: none;
+            background-color: #334155;
+            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5);
+            transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .board-rotated { transform: rotate(180deg); }
+        .square { display: flex; align-items: center; justify-content: center; position: relative; }
+        .square.dark { background-color: var(--board-dark); }
+        .square.light { background-color: var(--board-light); }
+        .operator {
+            position: absolute; pointer-events: none;
+            font-size: clamp(1rem, 3vw, 2rem); font-weight: 900;
+            color: rgba(6, 78, 59, 0.4); text-shadow: 1px 1px 0px rgba(255,255,255,0.3);
+            z-index: 5; transition: transform 0.6s ease;
+        }
+        .board-rotated .operator { transform: rotate(180deg); }
+        .piece {
+            width: 80%; height: 80%; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; z-index: 10;
+            transition: all 0.2s ease, transform 0.6s ease;
+            font-weight: 800; font-size: clamp(0.7rem, 2vw, 1.1rem);
+            color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border: 3px solid rgba(255,255,255,0.2);
+        }
+        .piece.blue { background: radial-gradient(circle at 30% 30%, #3b82f6, #1e3a8a); }
+        .piece.red { background: radial-gradient(circle at 30% 30%, #ef4444, #7f1d1d); }
+        .board-rotated .piece { transform: rotate(180deg); }
+        .piece.selected { transform: scale(1.1); border-color: #fbbf24; box-shadow: 0 0 15px #fbbf24; z-index: 30; }
+        .piece.dama::after {
+            content: 'D'; position: absolute; top: -5px; right: -5px;
+            background: #fbbf24; color: #000; border-radius: 50%;
+            width: 22px; height: 22px; font-size: 12px;
+            display: flex; align-items: center; justify-content: center;
+            border: 2px solid white; font-weight: 900;
+        }
+        .valid-move::after {
+            content: ''; width: 30%; height: 30%;
+            background-color: #22c55e; border-radius: 50%; opacity: 0.7;
+        }
+        .score-box { transition: all 0.3s ease; border: 4px solid transparent; }
+        .active-turn { transform: scale(1.02); border-color: #fbbf24; box-shadow: 0 0 20px rgba(251, 191, 36, 0.3); }
+        .history-list { height: 180px; overflow-y: auto; }
+        .history-item { font-family: monospace; padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.75rem; }
+        #lobby { position: fixed; inset: 0; background: #0f172a; z-index: 200; display: flex; align-items: center; justify-content: center; }
+        #winner-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 300; display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center p-4">
+
+    <!-- LOBBY SCREEN -->
+    <div id="lobby">
+        <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center">
+            <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
+            <div class="space-y-4">
+                <button onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider">Create New Game</button>
+                <div class="flex items-center gap-2">
+                    <div class="h-px flex-1 bg-slate-700"></div>
+                    <span class="text-xs text-slate-500 font-bold">OR JOIN</span>
+                    <div class="h-px flex-1 bg-slate-700"></div>
+                </div>
+                <input type="text" id="join-id" placeholder="Enter 4-Digit ID" class="w-full py-4 bg-slate-900 border border-slate-700 rounded-2xl text-center text-xl font-mono tracking-widest outline-none focus:border-blue-500">
+                <button onclick="joinGame()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold uppercase tracking-wider">Join Match</button>
+            </div>
+            <p id="lobby-status" class="mt-6 text-sm text-slate-400 h-4"></p>
+        </div>
+    </div>
+
+    <!-- WINNER MODAL -->
+    <div id="winner-modal" class="p-4">
+        <div class="bg-slate-800 p-10 rounded-3xl border-4 border-yellow-500 text-center max-w-md w-full">
+            <h2 class="text-5xl font-black italic mb-2">GAME OVER</h2>
+            <div id="winner-name" class="text-4xl font-bold mb-8">PLAYER WINS!</div>
+            <button onclick="location.reload()" class="w-full py-4 bg-yellow-500 text-black font-black uppercase rounded-2xl">Return to Lobby</button>
+        </div>
+    </div>
+
+    <div id="game-ui" class="hidden max-w-7xl w-full flex flex-col items-center">
+        <header class="text-center mb-8">
+            <h1 class="text-5xl font-black italic">DA<span class="text-blue-500">MATH</span></h1>
+            <div class="flex items-center justify-center gap-4 mt-2">
+                <span id="display-game-id" class="px-3 py-1 bg-slate-800 rounded-full text-[10px] font-mono text-slate-400 border border-slate-700 uppercase">Room: ----</span>
+                <span id="display-player-role" class="px-3 py-1 bg-slate-800 rounded-full text-[10px] font-bold text-yellow-500 border border-slate-700 uppercase">Role: Observer</span>
+            </div>
+        </header>
+
+        <div class="game-container">
+            <!-- Blue Side -->
+            <div class="score-sidebar flex flex-col gap-4">
+                <div id="player-blue" class="score-box bg-slate-800 p-6 rounded-3xl flex flex-col items-center">
+                    <div class="text-[10px] uppercase font-black text-blue-400 mb-1">Blue Player</div>
+                    <div class="text-4xl font-mono font-black" id="score-blue">0</div>
+                    <div id="history-blue" class="history-list w-full mt-4 text-blue-300"></div>
+                </div>
+            </div>
+
+            <!-- Board -->
+            <div class="board-section flex flex-col items-center gap-6">
+                <div id="board" class="checker-board rounded-xl overflow-hidden"></div>
+                <div class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 min-h-[80px] flex flex-col items-center justify-center">
+                    <div id="last-op" class="text-blue-400 font-mono text-lg font-bold italic">Waiting for opponent...</div>
+                    <div id="player-status" class="text-[10px] font-bold uppercase text-slate-500 mt-2"></div>
+                </div>
+                
+                <div id="controls" class="flex gap-4 w-full">
+                    <button id="btn-undo" onclick="undoGlobal()" class="flex-1 bg-slate-700 py-3 rounded-xl text-xs font-black uppercase hidden">Undo</button>
+                    <button id="btn-done" onclick="manualEndTurn()" class="flex-2 bg-green-600 py-3 rounded-xl text-xs font-black uppercase hidden px-8">End Turn</button>
+                </div>
+            </div>
+
+            <!-- Red Side -->
+            <div class="score-sidebar flex flex-col gap-4">
+                <div id="player-red" class="score-box bg-slate-800 p-6 rounded-3xl flex flex-col items-center">
+                    <div class="text-[10px] uppercase font-black text-red-400 mb-1">Red Player</div>
+                    <div class="text-4xl font-mono font-black" id="score-red">0</div>
+                    <div id="history-red" class="history-list w-full mt-4 text-red-300"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'damath-multiplayer';
+
+        const boardOps = [
+            ['×', null, '÷', null, '-', null, '+', null], [null, '÷', null, '×', null, '+', null, '-'],
+            ['-', null, '+', null, '×', null, '÷', null], [null, '+', null, '-', null, '÷', null, '×'],
+            ['×', null, '÷', null, '-', null, '+', null], [null, '÷', null, '×', null, '+', null, '-'],
+            ['-', null, '+', null, '×', null, '÷', null], [null, '+', null, '-', null, '÷', null, '×']
+        ];
+
+        let currentGameId = null;
+        let myRole = null; // 'blue', 'red', or 'observer'
+        let user = null;
+
+        // Game Local State
+        let localState = {
+            board: [], turn: 'blue', selected: null, validMoves: [],
+            scores: { blue: 0, red: 0 }, history: { blue: [], red: [] },
+            pendingTurnCaptures: [], currentTurnEquation: "", currentTurnTotal: 0,
+            moveCompleted: false, canContinueJumping: false, gameOver: false,
+            historyStack: [], players: { blue: null, red: null }
+        };
+
+        // --- Firebase Auth ---
+        onAuthStateChanged(auth, (u) => {
+            user = u;
+            if (!u) signInAnonymously(auth);
+        });
+
+        // --- Lobby Logic ---
+        window.createGame = async () => {
+            if (!user) return;
+            const id = Math.floor(1000 + Math.random() * 9000).toString();
+            const initialBoard = generateInitialBoard();
+            const gameData = {
+                id, turn: 'blue', scores: { blue: 0, red: 0 },
+                history: { blue: [], red: [] }, board: initialBoard,
+                players: { blue: user.uid, red: null },
+                historyStack: [{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }],
+                status: 'waiting'
+            };
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), gameData);
+            startSession(id, 'blue');
+        };
+
+        window.joinGame = async () => {
+            const id = document.getElementById('join-id').value;
+            if (!id || !user) return;
+            const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id));
+            if (!snap.exists()) {
+                document.getElementById('lobby-status').innerText = "Game not found.";
+                return;
+            }
+            const data = snap.data();
+            let role = 'observer';
+            if (data.players.blue === user.uid) role = 'blue';
+            else if (data.players.red === user.uid) role = 'red';
+            else if (!data.players.red) {
+                role = 'red';
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), { 'players.red': user.uid, status: 'active' });
+            }
+            startSession(id, role);
+        };
+
+        function startSession(id, role) {
+            currentGameId = id;
+            myRole = role;
+            document.getElementById('lobby').style.display = 'none';
+            document.getElementById('game-ui').classList.remove('hidden');
+            document.getElementById('display-game-id').innerText = `Room: ${id}`;
+            document.getElementById('display-player-role').innerText = `Role: ${role}`;
+            if (role === 'red') document.getElementById('board').classList.add('board-rotated');
+            
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), (snap) => {
+                if (snap.exists()) {
+                    syncState(snap.data());
+                }
+            }, (err) => console.error("Firestore Error:", err));
+        }
+
+        // --- Core Game Logic ---
+        function generateInitialBoard() {
+            let b = Array(8).fill(null).map(() => Array(8).fill(null));
+            const place = (color, val, x, y) => { b[7-y][x] = { color, value: val, isDama: false }; };
+            // Blue
+            place('blue', -11, 1, 0); place('blue', 8, 3, 0); place('blue', -5, 5, 0); place('blue', 2, 7, 0);
+            place('blue', 0, 0, 1); place('blue', -3, 2, 1); place('blue', 10, 4, 1); place('blue', -7, 6, 1);
+            place('blue', -9, 1, 2); place('blue', 6, 3, 2); place('blue', -1, 5, 2); place('blue', 4, 7, 2);
+            // Red
+            place('red', -9, 6, 5); place('red', 6, 4, 5); place('red', -1, 2, 5); place('red', 4, 0, 5);
+            place('red', 0, 7, 6); place('red', -3, 5, 6); place('red', 10, 3, 6); place('red', -7, 1, 6);
+            place('red', -11, 6, 7); place('red', 8, 4, 7); place('red', -5, 2, 7); place('red', 2, 0, 7);
+            return b;
+        }
+
+        function syncState(data) {
+            localState.board = data.board;
+            localState.turn = data.turn;
+            localState.scores = data.scores;
+            localState.history = data.history;
+            localState.historyStack = data.historyStack;
+            localState.players = data.players;
+            
+            // Clear selections when turn changes remotely
+            if (!localState.moveCompleted) {
+                localState.selected = null;
+                localState.validMoves = [];
+            }
+            render();
+        }
+
+        async function updateRemote() {
+            if (!currentGameId) return;
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), {
+                board: localState.board,
+                turn: localState.turn,
+                scores: localState.scores,
+                history: localState.history,
+                historyStack: localState.historyStack
+            });
+        }
+
+        window.handlePieceClick = (r, c) => {
+            if (localState.turn !== myRole || localState.gameOver) return;
+            const piece = localState.board[r][c];
+            if (!piece || piece.color !== localState.turn) return;
+
+            if (localState.moveCompleted) {
+                if (localState.canContinueJumping && localState.selected.r === r && localState.selected.c === c) {
+                    localState.validMoves = getValidMoves(r, c, true);
+                } else return;
+            } else {
+                localState.selected = (localState.selected?.r === r && localState.selected?.c === c) ? null : { r, c };
+                localState.validMoves = localState.selected ? getValidMoves(r, c) : [];
+            }
+            render();
+        };
+
+        window.handleMove = (tr, tc) => {
+            const move = localState.validMoves.find(m => m.r === tr && m.c === tc);
+            if (!move) return;
+
+            const piece = localState.board[localState.selected.r][localState.selected.c];
+            if (move.captured) {
+                const cap = localState.board[move.captured.r][move.captured.c];
+                const op = boardOps[tr][tc] || '+';
+                let score = calculateScore(piece.value, cap.value, op);
+                if (piece.isDama) score *= 2;
+                localState.pendingTurnCaptures.push(`(${piece.value}${op}${cap.value})=${score.toFixed(1).replace('.0','')}`);
+                localState.currentTurnTotal += score;
+                localState.board[move.captured.r][move.captured.c] = null;
+            }
+
+            localState.board[tr][tc] = piece;
+            localState.board[localState.selected.r][localState.selected.c] = null;
+            localState.selected = { r: tr, c: tc };
+            
+            const nextJumps = getValidMoves(tr, tc, true);
+            localState.moveCompleted = true;
+            localState.canContinueJumping = nextJumps.length > 0;
+            localState.validMoves = localState.canContinueJumping ? nextJumps : [];
+            render();
+        };
+
+        window.manualEndTurn = async () => {
+            const piece = localState.board[localState.selected.r][localState.selected.c];
+            if (piece && ((localState.turn === 'blue' && localState.selected.r === 0) || (localState.turn === 'red' && localState.selected.r === 7))) {
+                piece.isDama = true;
+            }
+
+            if (localState.pendingTurnCaptures.length > 0) {
+                localState.history[localState.turn].push(...localState.pendingTurnCaptures);
+            }
+            localState.scores[localState.turn] += localState.currentTurnTotal;
+            localState.turn = localState.turn === 'blue' ? 'red' : 'blue';
+            
+            // Clean local turn state
+            localState.selected = null; localState.validMoves = [];
+            localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
+            localState.moveCompleted = false; localState.canContinueJumping = false;
+
+            // Update stack
+            const snap = { 
+                board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
+                turn: localState.turn, 
+                scores: {...localState.scores}, 
+                history: { blue: [...localState.history.blue], red: [...localState.history.red] } 
+            };
+            localState.historyStack.push(snap);
+            if (localState.historyStack.length > 50) localState.historyStack.shift();
+
+            await updateRemote();
+        };
+
+        window.undoGlobal = async () => {
+            if (localState.historyStack.length <= 1) return;
+            localState.historyStack.pop();
+            const last = localState.historyStack[localState.historyStack.length - 1];
+            localState.board = last.board;
+            localState.turn = last.turn;
+            localState.scores = last.scores;
+            localState.history = last.history;
+            localState.selected = null; localState.validMoves = [];
+            localState.moveCompleted = false; localState.gameOver = false;
+            await updateRemote();
+        };
+
+        function calculateScore(v1, v2, op) {
+            if (op === '+') return v1 + v2;
+            if (op === '-') return v1 - v2;
+            if (op === '×') return v1 * v2;
+            if (op === '÷') return v2 === 0 ? 0 : v1 / v2;
+            return v1 + v2;
+        }
+
+        function getValidMoves(r, c, jumpOnly = false) {
+            const piece = localState.board[r][c];
+            if (!piece) return [];
+            const moves = [];
+            const all = [[-1,-1], [-1,1], [1,-1], [1,1]];
+            const fwd = piece.color === 'blue' ? [[-1,-1], [-1,1]] : [[1,-1], [1,1]];
+            const dirs = piece.isDama ? all : fwd;
+
+            all.forEach(([dr, dc]) => {
+                let nr = r + dr, nc = c + dc, jr = r + dr*2, jc = c + dc*2;
+                if (jr >= 0 && jr < 8 && jc >= 0 && jc < 8) {
+                    const mid = localState.board[nr][nc];
+                    if (mid && mid.color !== piece.color && !localState.board[jr][jc]) {
+                        moves.push({ r: jr, c: jc, captured: { r: nr, c: nc } });
+                    }
+                }
+            });
+            if (moves.length > 0) return moves;
+            if (!jumpOnly) {
+                dirs.forEach(([dr, dc]) => {
+                    let nr = r + dr, nc = c + dc;
+                    if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && !localState.board[nr][nc]) moves.push({ r: nr, c: nc });
+                });
+            }
+            return moves;
+        }
+
+        function render() {
+            const boardEl = document.getElementById('board');
+            boardEl.innerHTML = '';
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    const square = document.createElement('div');
+                    const isDark = (r + c) % 2 !== 0;
+                    square.className = `square ${isDark ? 'dark' : 'light'}`;
+                    const op = boardOps[r][c];
+                    if (op && !isDark) {
+                        const opEl = document.createElement('span');
+                        opEl.className = 'operator'; opEl.innerText = op;
+                        square.appendChild(opEl);
+                    }
+                    const piece = localState.board[r][c];
+                    if (piece) {
+                        const pieceEl = document.createElement('div');
+                        pieceEl.className = `piece ${piece.color} ${piece.isDama ? 'dama' : ''} ${localState.selected?.r === r && localState.selected?.c === c ? 'selected' : ''}`;
+                        pieceEl.innerText = piece.value;
+                        pieceEl.onclick = () => handlePieceClick(r, c);
+                        square.appendChild(pieceEl);
+                    }
+                    if (localState.validMoves.some(m => m.r === r && m.c === c)) {
+                        square.classList.add('valid-move');
+                        square.onclick = () => handleMove(r, c);
+                    }
+                    boardEl.appendChild(square);
+                }
+            }
+            document.getElementById('score-blue').innerText = localState.scores.blue.toFixed(1).replace('.0', '');
+            document.getElementById('score-red').innerText = localState.scores.red.toFixed(1).replace('.0', '');
+            document.getElementById('player-blue').classList.toggle('active-turn', localState.turn === 'blue');
+            document.getElementById('player-red').classList.toggle('active-turn', localState.turn === 'red');
+            
+            ['blue', 'red'].forEach(c => {
+                const hEl = document.getElementById(`history-${c}`);
+                hEl.innerHTML = localState.history[c].map(item => `<div class="history-item">${item}</div>`).join('');
+                hEl.scrollTop = hEl.scrollHeight;
+            });
+
+            const status = document.getElementById('last-op');
+            const pStatus = document.getElementById('player-status');
+            
+            if (localState.turn === myRole) {
+                status.innerText = localState.moveCompleted ? "Confirm End Turn" : "Your Turn";
+                status.className = "text-green-400 font-mono font-bold animate-pulse";
+                pStatus.innerText = "You are currently playing";
+            } else {
+                status.innerText = `Waiting for ${localState.turn.toUpperCase()}`;
+                status.className = "text-slate-500 font-mono font-bold";
+                pStatus.innerText = `You are ${myRole}`;
+            }
+
+            document.getElementById('btn-done').classList.toggle('hidden', localState.turn !== myRole || !localState.moveCompleted);
+            document.getElementById('btn-undo').classList.toggle('hidden', localState.turn !== myRole || localState.historyStack.length <= 1);
+        }
+    </script>
+</body>
+</html>
