@@ -78,12 +78,15 @@
         .history-item { font-family: monospace; padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.75rem; }
         #lobby { position: fixed; inset: 0; background: #0f172a; z-index: 200; display: flex; align-items: center; justify-content: center; }
         #winner-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 300; display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); }
-        .error-overlay { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ef4444; color: white; padding: 12px 24px; border-radius: 12px; font-weight: bold; z-index: 500; display: none; }
+        .error-overlay { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #ef4444; color: white; padding: 16px 32px; border-radius: 12px; font-weight: bold; z-index: 500; display: none; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); text-align: center; }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center p-4">
 
-    <div id="error-box" class="error-overlay"></div>
+    <div id="error-box" class="error-overlay">
+        <div id="error-msg"></div>
+        <button onclick="this.parentElement.style.display='none'" class="mt-2 text-xs underline opacity-80">Close</button>
+    </div>
 
     <!-- LOBBY SCREEN -->
     <div id="lobby">
@@ -91,14 +94,14 @@
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
             <div id="loading-spinner" class="mb-4 text-blue-400 font-bold">Connecting to server...</div>
             <div id="lobby-controls" class="space-y-4 opacity-50 pointer-events-none">
-                <button onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider">Create New Game</button>
+                <button id="btn-create" onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider transition-all disabled:opacity-50">Create New Game</button>
                 <div class="flex items-center gap-2">
                     <div class="h-px flex-1 bg-slate-700"></div>
                     <span class="text-xs text-slate-500 font-bold">OR JOIN</span>
                     <div class="h-px flex-1 bg-slate-700"></div>
                 </div>
                 <input type="text" id="join-id" placeholder="Enter 4-Digit ID" class="w-full py-4 bg-slate-900 border border-slate-700 rounded-2xl text-center text-xl font-mono tracking-widest outline-none focus:border-blue-500">
-                <button onclick="joinGame()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold uppercase tracking-wider">Join Match</button>
+                <button onclick="joinGame()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-2xl font-bold uppercase tracking-wider transition-all">Join Match</button>
             </div>
             <p id="lobby-status" class="mt-6 text-sm text-slate-400 h-4"></p>
         </div>
@@ -189,26 +192,19 @@
         };
 
         const showError = (msg) => {
+            console.error("Game Error:", msg);
             const el = document.getElementById('error-box');
-            el.innerText = msg;
+            document.getElementById('error-msg').innerText = msg;
             el.style.display = 'block';
         };
 
-        // Authentication logic
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
                 document.getElementById('loading-spinner').style.display = 'none';
                 document.getElementById('lobby-controls').classList.remove('opacity-50', 'pointer-events-none');
             } else {
-                signInAnonymously(auth).catch(err => {
-                    console.error(err);
-                    if (err.code === 'auth/configuration-not-found') {
-                        showError("Error: Anonymous Sign-in is disabled in Firebase Console.");
-                    } else {
-                        showError("Firebase Error: " + err.message);
-                    }
-                });
+                signInAnonymously(auth).catch(err => showError("Firebase Auth Error: " + err.message));
             }
         });
 
@@ -220,21 +216,35 @@
         ];
 
         window.createGame = async () => {
-            if (!user) return showError("Not logged in. Check Firebase auth settings.");
+            if (!user) return showError("Not connected to server yet.");
+            
+            const btn = document.getElementById('btn-create');
+            btn.disabled = true;
+            btn.innerText = "Creating...";
+
             const id = Math.floor(1000 + Math.random() * 9000).toString();
             const initialBoard = generateInitialBoard();
+            
+            // Serialize nested arrays to strings to bypass Firestore limitations
             const gameData = {
-                id, turn: 'blue', scores: { blue: 0, red: 0 },
-                history: { blue: [], red: [] }, board: initialBoard,
+                id, 
+                turn: 'blue', 
+                scores: { blue: 0, red: 0 },
+                history: { blue: [], red: [] }, 
+                board: JSON.stringify(initialBoard), // SERIALIZED
                 players: { blue: user.uid, red: null },
-                historyStack: [{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }],
-                status: 'waiting'
+                historyStack: JSON.stringify([{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }]), // SERIALIZED
+                status: 'waiting',
+                createdAt: new Date().toISOString()
             };
+
             try {
                 await setDoc(doc(db, 'games', id), gameData);
                 startSession(id, 'blue');
             } catch (e) {
-                showError("Firestore Permission Error: Check your database rules.");
+                btn.disabled = false;
+                btn.innerText = "Create New Game";
+                showError("Could not create game: " + e.message);
             }
         };
 
@@ -290,12 +300,15 @@
         }
 
         function syncState(data) {
-            localState.board = data.board;
+            // Deserialize board and historyStack
+            localState.board = typeof data.board === 'string' ? JSON.parse(data.board) : data.board;
+            localState.historyStack = typeof data.historyStack === 'string' ? JSON.parse(data.historyStack) : data.historyStack;
+            
             localState.turn = data.turn;
             localState.scores = data.scores;
             localState.history = data.history;
-            localState.historyStack = data.historyStack;
             localState.players = data.players;
+            
             if (!localState.moveCompleted) {
                 localState.selected = null;
                 localState.validMoves = [];
@@ -305,13 +318,18 @@
 
         async function updateRemote() {
             if (!currentGameId) return;
-            await updateDoc(doc(db, 'games', currentGameId), {
-                board: localState.board,
-                turn: localState.turn,
-                scores: localState.scores,
-                history: localState.history,
-                historyStack: localState.historyStack
-            });
+            try {
+                // Serialize board and historyStack before updating
+                await updateDoc(doc(db, 'games', currentGameId), {
+                    board: JSON.stringify(localState.board),
+                    turn: localState.turn,
+                    scores: localState.scores,
+                    history: localState.history,
+                    historyStack: JSON.stringify(localState.historyStack)
+                });
+            } catch (e) {
+                showError("Failed to update game: " + e.message);
+            }
         }
 
         window.handlePieceClick = (r, c) => {
@@ -368,6 +386,7 @@
             localState.selected = null; localState.validMoves = [];
             localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
             localState.moveCompleted = false; localState.canContinueJumping = false;
+            
             const snap = { 
                 board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
                 turn: localState.turn, 
@@ -375,7 +394,7 @@
                 history: { blue: [...localState.history.blue], red: [...localState.history.red] } 
             };
             localState.historyStack.push(snap);
-            if (localState.historyStack.length > 50) localState.historyStack.shift();
+            if (localState.historyStack.length > 30) localState.historyStack.shift();
             await updateRemote();
         };
 
@@ -428,6 +447,7 @@
 
         function render() {
             const boardEl = document.getElementById('board');
+            if (!boardEl) return;
             boardEl.innerHTML = '';
             for (let r = 0; r < 8; r++) {
                 for (let c = 0; c < 8; c++) {
