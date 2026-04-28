@@ -32,7 +32,7 @@
             
             <div id="connection-status" class="mb-6">
                 <div class="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-                <p class="text-blue-400 font-bold">Connecting to Services...</p>
+                <p class="text-blue-400 font-bold">Synchronizing with Database...</p>
                 <p id="retry-hint" class="text-[10px] text-slate-600 mt-4 hidden">Connection taking longer than usual...</p>
             </div>
 
@@ -99,12 +99,32 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global State
-        const firebaseConfig = JSON.parse(__firebase_config);
+        // Global State - Safely handling external environments
+        let firebaseConfig;
+        if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+            // Fallback to the user's specific Firebase config for external hosting
+            firebaseConfig = {
+                apiKey: "AIzaSyCsauqSlcJ9lVf4dqy9YmWQAZRZ8DQrVBo",
+                authDomain: "damath-ba689.firebaseapp.com",
+                projectId: "damath-ba689",
+                storageBucket: "damath-ba689.firebasestorage.app",
+                messagingSenderId: "37396916011",
+                appId: "1:37396916011:web:1ccbe20b5cbac860f3076e"
+            };
+        }
+
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'damath-stable-v1';
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        
+        let app, auth, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.error("Firebase Initialization Error:", e);
+        }
 
         let user = null;
         let roomId = null;
@@ -134,6 +154,12 @@
 
         // --- AUTH INIT ---
         const initAuth = async () => {
+            if (!auth) {
+                connEl.innerHTML = `<p class="text-red-400 font-bold mb-4">Firebase Config Missing</p>`;
+                lobbyUiEl.classList.remove('hidden');
+                return;
+            }
+
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -142,32 +168,35 @@
                 }
             } catch (err) {
                 console.error("Auth Failed", err);
-                // Fallback: If auth fails, we allow lobby view but room creation will likely fail
-                connEl.innerHTML = `<p class="text-red-400">Offline Mode Enabled</p>`;
+                connEl.innerHTML = `<p class="text-red-400 text-sm font-bold mb-4">Authentication failed. Check your Firebase console settings.</p>`;
                 lobbyUiEl.classList.remove('hidden');
             }
         };
 
-        onAuthStateChanged(auth, (u) => {
-            user = u;
-            if (user) {
-                connEl.classList.add('hidden');
-                lobbyUiEl.classList.remove('hidden');
-            }
-        });
+        if (auth) {
+            onAuthStateChanged(auth, (u) => {
+                user = u;
+                if (user) {
+                    connEl.classList.add('hidden');
+                    lobbyUiEl.classList.remove('hidden');
+                }
+            });
+            initAuth();
+        }
 
-        // Fail-safe for long loading
+        // Ultimate fail-safe for long loading - guarantees the lobby un-sticks
         setTimeout(() => {
             if (connEl && !connEl.classList.contains('hidden')) {
-                document.getElementById('retry-hint').classList.remove('hidden');
+                connEl.innerHTML = `<p class="text-yellow-400 font-bold mb-4">Connection Timeout.</p>`;
+                lobbyUiEl.classList.remove('hidden');
             }
-        }, 3000);
+        }, 5000);
 
         // --- CORE GAME ACTIONS ---
         const getGameRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
 
         window.createGame = async () => {
-            if (!user) return;
+            if (!user) return alert("Not authenticated. Please check your connection.");
             const id = Math.floor(1000 + Math.random() * 9000).toString();
             const initialBoard = generateBoard();
             const data = {
@@ -183,12 +212,12 @@
                 localStorage.setItem('last_room', id);
                 enterRoom(id, 'blue');
             } catch (e) {
-                alert("Failed to create match. Check connection.");
+                alert("Failed to create match. Check your Firestore Database rules.");
             }
         };
 
         window.joinGame = async () => {
-            if (!user) return;
+            if (!user) return alert("Not authenticated. Please check your connection.");
             const id = document.getElementById('join-id').value.trim();
             if (!id) return;
             try {
@@ -206,17 +235,21 @@
                 }
                 enterRoom(id, role);
             } catch (e) {
-                alert("Could not join room.");
+                alert("Could not join room. Check your Firestore Database rules.");
             }
         };
 
         window.emergencyHardReset = async () => {
-            const lastRoom = localStorage.getItem('last_room');
-            if (lastRoom) {
-                try { await deleteDoc(getGameRef(lastRoom)); } catch(e) {}
-            }
-            localStorage.clear();
-            await signOut(auth);
+            const btn = event.target;
+            btn.innerText = "PURGING...";
+            try {
+                const lastRoom = localStorage.getItem('last_room');
+                if (lastRoom && db) {
+                    await deleteDoc(getGameRef(lastRoom));
+                }
+                localStorage.clear();
+                if (auth) await signOut(auth);
+            } catch(e) {}
             location.reload();
         };
 
@@ -412,9 +445,6 @@
             
             turnBoard = null; selected = null; moves = []; tempScore = 0; jumpChain = false;
         };
-
-        // Start Auth
-        initAuth();
 
     </script>
 </body>
