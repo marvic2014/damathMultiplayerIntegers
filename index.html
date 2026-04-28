@@ -92,8 +92,11 @@
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center">
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
-            <div id="loading-spinner" class="mb-4 text-blue-400 font-bold">Connecting to server...</div>
-            <div id="lobby-controls" class="space-y-4 opacity-50 pointer-events-none">
+            <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
+                <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <div class="text-blue-400 font-bold">Connecting to server...</div>
+            </div>
+            <div id="lobby-controls" class="space-y-4 hidden">
                 <button id="btn-create" onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider transition-all disabled:opacity-50">Create New Game</button>
                 <div class="flex items-center gap-2">
                     <div class="h-px flex-1 bg-slate-700"></div>
@@ -165,7 +168,6 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Environment Variables
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         
@@ -176,6 +178,7 @@
         let currentGameId = null;
         let myRole = null; 
         let user = null;
+        let unsubscribeSnapshot = null;
 
         let localState = {
             board: [], turn: 'blue', selected: null, validMoves: [],
@@ -191,6 +194,8 @@
             document.getElementById('error-msg').innerText = msg;
             el.style.display = 'block';
             document.getElementById('lobby-status').innerText = msg;
+            document.getElementById('loading-spinner').style.display = 'none';
+            document.getElementById('lobby-controls').classList.remove('hidden');
         };
 
         // RULE 3: Auth Before Queries
@@ -206,14 +211,15 @@
             }
         };
 
+        // Start Auth
+        initAuth();
+
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
                 document.getElementById('loading-spinner').style.display = 'none';
-                document.getElementById('lobby-controls').classList.remove('opacity-50', 'pointer-events-none');
-                document.getElementById('lobby-status').innerText = "Logged in as " + user.uid.substring(0, 8);
-            } else {
-                initAuth();
+                document.getElementById('lobby-controls').classList.remove('hidden');
+                document.getElementById('lobby-status').innerText = "Ready to Play";
             }
         });
 
@@ -224,11 +230,10 @@
             ['-', null, '+', null, '×', null, '÷', null], [null, '+', null, '-', null, '÷', null, '×']
         ];
 
-        // Helper for RULE 1: Mandatory Path
         const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
 
         window.createGame = async () => {
-            if (!user) return showError("Wait for connection...");
+            if (!user) return showError("Not connected to server.");
             
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
@@ -269,12 +274,12 @@
             const btn = document.getElementById('btn-join');
             btn.disabled = true;
             btn.innerText = "Joining...";
-            document.getElementById('lobby-status').innerText = "Searching for room " + idInput + "...";
+            document.getElementById('lobby-status').innerText = "Searching...";
 
             try {
                 const snap = await getDoc(getGameDocRef(idInput));
                 if (!snap.exists()) {
-                    document.getElementById('lobby-status').innerText = "Room " + idInput + " not found.";
+                    document.getElementById('lobby-status').innerText = "Room not found.";
                     btn.disabled = false;
                     btn.innerText = "Join Match";
                     return;
@@ -293,8 +298,6 @@
                         'players.red': user.uid, 
                         status: 'active' 
                     });
-                } else {
-                    role = 'observer';
                 }
                 
                 startSession(idInput, role);
@@ -306,6 +309,8 @@
         };
 
         function startSession(id, role) {
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+            
             currentGameId = id;
             myRole = role;
             document.getElementById('lobby').style.display = 'none';
@@ -317,8 +322,7 @@
                 document.getElementById('board').classList.add('board-rotated');
             }
             
-            // Standard Firestore Listener with Error Callback
-            onSnapshot(getGameDocRef(id), (snap) => {
+            unsubscribeSnapshot = onSnapshot(getGameDocRef(id), (snap) => {
                 if (snap.exists()) {
                     syncState(snap.data());
                 }
