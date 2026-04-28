@@ -92,10 +92,13 @@
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center">
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
+            
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
                 <div class="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                 <div class="text-blue-400 font-bold">Connecting to server...</div>
+                <button id="btn-retry-auth" onclick="location.reload()" class="hidden text-xs text-slate-500 underline mt-2">Taking too long? Click to retry</button>
             </div>
+
             <div id="lobby-controls" class="space-y-4 hidden">
                 <button id="btn-create" onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider transition-all disabled:opacity-50">Create New Game</button>
                 <div class="flex items-center gap-2">
@@ -129,7 +132,6 @@
         </header>
 
         <div class="game-container">
-            <!-- Blue Side -->
             <div class="score-sidebar flex flex-col gap-4">
                 <div id="player-blue" class="score-box bg-slate-800 p-6 rounded-3xl flex flex-col items-center">
                     <div class="text-[10px] uppercase font-black text-blue-400 mb-1">Blue Player</div>
@@ -138,7 +140,6 @@
                 </div>
             </div>
 
-            <!-- Board -->
             <div class="board-section flex flex-col items-center gap-6">
                 <div id="board" class="checker-board rounded-xl overflow-hidden"></div>
                 <div class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 min-h-[80px] flex flex-col items-center justify-center">
@@ -152,7 +153,6 @@
                 </div>
             </div>
 
-            <!-- Red Side -->
             <div class="score-sidebar flex flex-col gap-4">
                 <div id="player-red" class="score-box bg-slate-800 p-6 rounded-3xl flex flex-col items-center">
                     <div class="text-[10px] uppercase font-black text-red-400 mb-1">Red Player</div>
@@ -179,6 +179,7 @@
         let myRole = null; 
         let user = null;
         let unsubscribeSnapshot = null;
+        let isAuthInitiated = false;
 
         let localState = {
             board: [], turn: 'blue', selected: null, validMoves: [],
@@ -186,23 +187,6 @@
             pendingTurnCaptures: [], currentTurnTotal: 0,
             moveCompleted: false, canContinueJumping: false, gameOver: false,
             historyStack: [], players: { blue: null, red: null }
-        };
-
-        const showError = (msg) => {
-            console.error("Game Error:", msg);
-            const el = document.getElementById('error-box');
-            if (el) {
-                document.getElementById('error-msg').innerText = msg;
-                el.style.display = 'block';
-            }
-            const lobbyStatus = document.getElementById('lobby-status');
-            if (lobbyStatus) lobbyStatus.innerText = msg;
-            
-            const spinner = document.getElementById('loading-spinner');
-            if (spinner) spinner.style.display = 'none';
-            
-            const controls = document.getElementById('lobby-controls');
-            if (controls) controls.classList.remove('hidden');
         };
 
         const showLobby = () => {
@@ -214,32 +198,49 @@
             if (status) status.innerText = "Ready to Play";
         };
 
-        // RULE 3: Auth Before Queries
+        const showError = (msg) => {
+            console.error("Game Error:", msg);
+            const el = document.getElementById('error-box');
+            if (el) {
+                document.getElementById('error-msg').innerText = msg;
+                el.style.display = 'block';
+            }
+            showLobby();
+            const status = document.getElementById('lobby-status');
+            if (status) status.innerText = msg;
+        };
+
+        // Improved Auth Logic
         const initAuth = async () => {
-            // Safety timeout: If auth takes more than 5 seconds, show lobby anyway
-            const timeout = setTimeout(() => {
-                if (!user) showLobby();
-            }, 5000);
+            if (isAuthInitiated) return;
+            isAuthInitiated = true;
+
+            // Show retry button after 3 seconds of "Connecting"
+            setTimeout(() => {
+                const retryBtn = document.getElementById('btn-retry-auth');
+                if (retryBtn && !user) retryBtn.classList.remove('hidden');
+            }, 3000);
 
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else if (!auth.currentUser) {
-                    await signInAnonymously(auth);
-                }
-                
-                // If already signed in
+                // 1. Immediate check if already logged in (important for refreshes)
                 if (auth.currentUser) {
                     user = auth.currentUser;
-                    clearTimeout(timeout);
                     showLobby();
+                    return;
+                }
+
+                // 2. Try Custom Token or Anonymous
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
                 }
             } catch (err) {
-                showError("Auth Failure: " + err.message);
+                console.warn("Initial auth attempt failed, waiting for state listener...", err);
             }
         };
 
-        // Listen for Auth changes
+        // Listen for Auth changes (Fallback if await doesn't resolve fast enough)
         onAuthStateChanged(auth, (u) => {
             if (u) {
                 user = u;
@@ -247,7 +248,7 @@
             }
         });
 
-        // Initialize Auth immediately
+        // Run immediately
         initAuth();
 
         const boardOps = [
@@ -261,24 +262,19 @@
 
         window.createGame = async () => {
             if (!user) return showError("Not connected to server.");
-            
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
             btn.innerText = "Creating...";
 
             const id = Math.floor(1000 + Math.random() * 9000).toString();
             const initialBoard = generateInitialBoard();
-            
             const gameData = {
-                id, 
-                turn: 'blue', 
-                scores: { blue: 0, red: 0 },
+                id, turn: 'blue', scores: { blue: 0, red: 0 },
                 history: { blue: [], red: [] }, 
                 board: JSON.stringify(initialBoard), 
                 players: { blue: user.uid, red: null },
                 historyStack: JSON.stringify([{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }]),
-                status: 'waiting',
-                createdAt: new Date().toISOString()
+                status: 'waiting', createdAt: new Date().toISOString()
             };
 
             try {
@@ -293,21 +289,16 @@
 
         window.joinGame = async () => {
             const idInput = document.getElementById('join-id').value.trim();
-            if (!idInput || !user) {
-                const status = document.getElementById('lobby-status');
-                if (status) status.innerText = "Enter a 4-digit code.";
-                return;
-            }
+            if (!idInput || !user) return;
 
             const btn = document.getElementById('btn-join');
             btn.disabled = true;
             btn.innerText = "Joining...";
-            document.getElementById('lobby-status').innerText = "Searching...";
 
             try {
                 const snap = await getDoc(getGameDocRef(idInput));
                 if (!snap.exists()) {
-                    document.getElementById('lobby-status').innerText = "Room not found.";
+                    showError("Room not found.");
                     btn.disabled = false;
                     btn.innerText = "Join Match";
                     return;
@@ -315,19 +306,12 @@
 
                 const data = snap.data();
                 let role = 'observer';
-                
-                if (data.players.blue === user.uid) {
-                    role = 'blue';
-                } else if (data.players.red === user.uid) {
+                if (data.players.blue === user.uid) role = 'blue';
+                else if (data.players.red === user.uid) role = 'red';
+                else if (!data.players.red) {
                     role = 'red';
-                } else if (!data.players.red) {
-                    role = 'red';
-                    await updateDoc(getGameDocRef(idInput), { 
-                        'players.red': user.uid, 
-                        status: 'active' 
-                    });
+                    await updateDoc(getGameDocRef(idInput), { 'players.red': user.uid, status: 'active' });
                 }
-                
                 startSession(idInput, role);
             } catch (e) {
                 btn.disabled = false;
@@ -338,22 +322,16 @@
 
         function startSession(id, role) {
             if (unsubscribeSnapshot) unsubscribeSnapshot();
-            
             currentGameId = id;
             myRole = role;
             document.getElementById('lobby').style.display = 'none';
             document.getElementById('game-ui').classList.remove('hidden');
             document.getElementById('display-game-id').innerText = `Room: ${id}`;
             document.getElementById('display-player-role').innerText = `Role: ${role}`;
-            
-            if (role === 'red') {
-                document.getElementById('board').classList.add('board-rotated');
-            }
+            if (role === 'red') document.getElementById('board').classList.add('board-rotated');
             
             unsubscribeSnapshot = onSnapshot(getGameDocRef(id), (snap) => {
-                if (snap.exists()) {
-                    syncState(snap.data());
-                }
+                if (snap.exists()) syncState(snap.data());
             }, (err) => showError("Sync Error: " + err.message));
         }
 
@@ -376,7 +354,6 @@
             localState.scores = data.scores;
             localState.history = data.history;
             localState.players = data.players;
-            
             if (!localState.moveCompleted) {
                 localState.selected = null;
                 localState.validMoves = [];
@@ -394,16 +371,13 @@
                     history: localState.history,
                     historyStack: JSON.stringify(localState.historyStack)
                 });
-            } catch (e) {
-                showError("Update Remote Error: " + e.message);
-            }
+            } catch (e) { showError("Update Remote Error: " + e.message); }
         }
 
         window.handlePieceClick = (r, c) => {
             if (localState.turn !== myRole || localState.gameOver) return;
             const piece = localState.board[r][c];
             if (!piece || piece.color !== localState.turn) return;
-
             if (localState.moveCompleted) {
                 if (localState.canContinueJumping && localState.selected.r === r && localState.selected.c === c) {
                     localState.validMoves = getValidMoves(r, c, true);
@@ -418,7 +392,6 @@
         window.handleMove = (tr, tc) => {
             const move = localState.validMoves.find(m => m.r === tr && m.c === tc);
             if (!move) return;
-
             const piece = localState.board[localState.selected.r][localState.selected.c];
             if (move.captured) {
                 const cap = localState.board[move.captured.r][move.captured.c];
@@ -429,7 +402,6 @@
                 localState.currentTurnTotal += score;
                 localState.board[move.captured.r][move.captured.c] = null;
             }
-
             localState.board[tr][tc] = piece;
             localState.board[localState.selected.r][localState.selected.c] = null;
             localState.selected = { r: tr, c: tc };
@@ -445,19 +417,15 @@
             if (piece && ((localState.turn === 'blue' && localState.selected.r === 0) || (localState.turn === 'red' && localState.selected.r === 7))) {
                 piece.isDama = true;
             }
-            if (localState.pendingTurnCaptures.length > 0) {
-                localState.history[localState.turn].push(...localState.pendingTurnCaptures);
-            }
+            if (localState.pendingTurnCaptures.length > 0) localState.history[localState.turn].push(...localState.pendingTurnCaptures);
             localState.scores[localState.turn] += localState.currentTurnTotal;
             localState.turn = localState.turn === 'blue' ? 'red' : 'blue';
             localState.selected = null; localState.validMoves = [];
             localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
             localState.moveCompleted = false; localState.canContinueJumping = false;
-            
             const snap = { 
                 board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
-                turn: localState.turn, 
-                scores: {...localState.scores}, 
+                turn: localState.turn, scores: {...localState.scores}, 
                 history: { blue: [...localState.history.blue], red: [...localState.history.red] } 
             };
             localState.historyStack.push(snap);
@@ -548,7 +516,7 @@
             document.getElementById('player-red').classList.toggle('active-turn', localState.turn === 'red');
             ['blue', 'red'].forEach(c => {
                 const hEl = document.getElementById(`history-${c}`);
-                hEl.innerHTML = localState.history[c].map(item => `<div class="history-item">${item}</div>`).join('');
+                hEl.innerHTML = (localState.history[c] || []).map(item => `<div class="history-item">${item}</div>`).join('');
                 hEl.scrollTop = hEl.scrollHeight;
             });
             const status = document.getElementById('last-op');
