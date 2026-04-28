@@ -91,16 +91,17 @@
     <!-- LOBBY SCREEN -->
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center relative">
+            <!-- ABSOLUTE TROUBLESHOOT BUTTON -->
             <div class="absolute top-4 right-4">
-                 <button onclick="forceResetLobby()" class="text-[10px] bg-slate-700 hover:bg-red-900 px-3 py-1 rounded-full font-bold transition-colors">Reset Session</button>
+                 <button onclick="forceResetLobby()" class="text-[10px] bg-red-900/50 hover:bg-red-600 text-white px-3 py-1 rounded-full font-bold transition-all border border-red-500/50">RESET SESSION</button>
             </div>
             
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
             
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <div class="text-blue-400 font-bold">Connecting to server...</div>
-                <p class="text-xs text-slate-500 mt-2 px-4 italic">If this takes more than 10 seconds, click the "Reset Session" button in the top right.</p>
+                <div class="text-blue-400 font-bold">Connecting...</div>
+                <p class="text-xs text-slate-500 mt-2 px-4 italic">Stuck? Use the "Reset Session" button in the corner.</p>
             </div>
 
             <div id="lobby-controls" class="space-y-4 hidden">
@@ -199,12 +200,8 @@
         const showLobby = () => {
             const spinner = document.getElementById('loading-spinner');
             const controls = document.getElementById('lobby-controls');
-            const status = document.getElementById('lobby-status');
-            
             if (spinner) spinner.style.display = 'none';
             if (controls) controls.classList.remove('hidden');
-            if (status) status.innerText = "Connected and ready";
-            
             document.getElementById('game-ui').classList.add('hidden');
             document.getElementById('lobby').style.display = 'flex';
         };
@@ -218,38 +215,15 @@
             showLobby();
         };
 
+        // GLOBAL TROUBLESHOOTING TRIGGER
         window.forceResetLobby = async () => {
             try {
                 await signOut(auth);
                 localStorage.clear();
+                sessionStorage.clear();
                 window.location.reload();
             } catch (e) {
                 window.location.reload();
-            }
-        };
-
-        const initAuth = async () => {
-            // Backup timer to show UI even if auth events miss
-            setTimeout(() => {
-                if (!user) {
-                    console.log("Auth callback delay, checking status...");
-                    if (auth.currentUser) {
-                        user = auth.currentUser;
-                        showLobby();
-                    }
-                }
-            }, 3000);
-
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Auth failed:", err);
-                // Last ditch effort to show something
-                showLobby();
             }
         };
 
@@ -259,6 +233,20 @@
                 showLobby();
             }
         });
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Auth error", err);
+                // Fallback to show lobby anyway so UI isn't locked
+                showLobby();
+            }
+        };
 
         initAuth();
 
@@ -272,7 +260,7 @@
         const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
 
         window.createGame = async () => {
-            if (!user) return showError("Connecting...");
+            if (!user) return showError("Not authenticated. Reset session.");
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
             btn.innerText = "Creating...";
@@ -295,45 +283,35 @@
             } catch (e) {
                 btn.disabled = false;
                 btn.innerText = "Create New Game";
-                showError("Database Error. Try 'Reset Session'.");
+                showError("Room creation failed.");
             }
         };
 
         window.joinGame = async () => {
             const idInput = document.getElementById('join-id').value.trim();
             if (!idInput || !user) return;
-
             const btn = document.getElementById('btn-join');
             btn.disabled = true;
-            btn.innerText = "Joining...";
 
             try {
                 const snap = await getDoc(getGameDocRef(idInput));
                 if (!snap.exists()) {
-                    showError("Room not found.");
+                    showError("Invalid Room ID.");
                     btn.disabled = false;
-                    btn.innerText = "Join Match";
                     return;
                 }
-
                 const data = snap.data();
                 let role = 'observer';
-                
                 if (data.players.blue === user.uid) role = 'blue';
                 else if (data.players.red === user.uid) role = 'red';
                 else if (!data.players.red) {
                     role = 'red';
-                    await updateDoc(getGameDocRef(idInput), { 
-                        'players.red': user.uid, 
-                        lastUpdate: serverTimestamp() 
-                    });
+                    await updateDoc(getGameDocRef(idInput), { 'players.red': user.uid });
                 }
-                
                 startSession(idInput, role);
             } catch (e) {
                 btn.disabled = false;
-                btn.innerText = "Join Match";
-                showError("Join Error: " + e.message);
+                showError("Join failed.");
             }
         };
 
@@ -351,11 +329,8 @@
             else boardEl.classList.remove('board-rotated');
             
             unsubscribeSnapshot = onSnapshot(getGameDocRef(id), (snap) => {
-                if (snap.exists()) {
-                    syncState(snap.data());
-                } else {
-                    showError("Game session closed.");
-                }
+                if (snap.exists()) syncState(snap.data());
+                else showError("Game ended.");
             }, (err) => showError("Connection lost."));
         }
 
@@ -378,15 +353,9 @@
             localState.scores = data.scores;
             localState.history = data.history;
             localState.players = data.players;
-            
             if (localState.turn !== myRole) {
-                localState.moveCompleted = false;
-                localState.selected = null;
-                localState.validMoves = [];
-                localState.pendingTurnCaptures = [];
-                localState.currentTurnTotal = 0;
+                localState.moveCompleted = false; localState.selected = null;
             }
-            
             render();
         }
 
@@ -401,7 +370,7 @@
                     historyStack: JSON.stringify(localState.historyStack),
                     lastUpdate: serverTimestamp()
                 });
-            } catch (e) { console.error("Sync error:", e); }
+            } catch (e) { console.error(e); }
         }
 
         window.handlePieceClick = (r, c) => {
@@ -453,27 +422,18 @@
             localState.selected = null; localState.validMoves = [];
             localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
             localState.moveCompleted = false; localState.canContinueJumping = false;
-            
-            const snap = { 
-                board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
-                turn: localState.turn, scores: {...localState.scores}, 
-                history: { blue: [...localState.history.blue], red: [...localState.history.red] } 
-            };
-            localState.historyStack.push(snap);
-            if (localState.historyStack.length > 30) localState.historyStack.shift();
+            localState.historyStack.push({ board: localState.board, turn: localState.turn, scores: localState.scores, history: localState.history });
             await updateRemote();
         };
 
         window.undoGlobal = async () => {
             if (localState.historyStack.length <= 1) return;
             localState.historyStack.pop();
-            const last = localState.historyStack[localState.historyStack.length - 1];
+            const last = localState.historyStack[localState.historyStack.length-1];
             localState.board = last.board;
             localState.turn = last.turn;
             localState.scores = last.scores;
             localState.history = last.history;
-            localState.selected = null; localState.validMoves = [];
-            localState.moveCompleted = false; localState.gameOver = false;
             await updateRemote();
         };
 
@@ -551,15 +511,12 @@
                 hEl.scrollTop = hEl.scrollHeight;
             });
             const status = document.getElementById('last-op');
-            const pStatus = document.getElementById('player-status');
             if (localState.turn === myRole) {
                 status.innerText = localState.moveCompleted ? "Confirm End Turn" : "Your Turn";
                 status.className = "text-green-400 font-mono font-bold animate-pulse";
-                pStatus.innerText = "You are currently playing";
             } else {
                 status.innerText = `Waiting for ${localState.turn.toUpperCase()}`;
                 status.className = "text-slate-500 font-mono font-bold";
-                pStatus.innerText = `You are ${myRole}`;
             }
             document.getElementById('btn-done').classList.toggle('hidden', localState.turn !== myRole || !localState.moveCompleted);
             document.getElementById('btn-undo').classList.toggle('hidden', localState.turn !== myRole || localState.historyStack.length <= 1);
