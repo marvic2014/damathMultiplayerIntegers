@@ -80,7 +80,6 @@
         #winner-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 300; display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); }
         .error-overlay { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #ef4444; color: white; padding: 16px 32px; border-radius: 12px; font-weight: bold; z-index: 500; display: none; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); text-align: center; }
         
-        /* Reset button pulse to show it's clickable */
         .reset-btn { animation: pulse 2s infinite; }
         @keyframes pulse {
             0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
@@ -99,11 +98,12 @@
     <!-- LOBBY SCREEN -->
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center relative">
-            <!-- FORCED RESET BUTTON -->
-            <div class="absolute -top-12 left-0 right-0 flex justify-center">
-                 <button id="master-reset" onclick="forceResetLobby(this)" class="reset-btn text-[11px] bg-red-600 hover:bg-red-500 text-white px-6 py-2 rounded-full font-black transition-all shadow-lg uppercase tracking-tighter">
-                    Emergency Reset Session
+            
+            <div class="absolute -top-16 left-0 right-0 flex flex-col gap-2 items-center">
+                 <button id="master-reset" onclick="hardResetApp()" class="reset-btn text-[10px] bg-red-600 hover:bg-red-500 text-white px-8 py-3 rounded-full font-black transition-all shadow-lg uppercase tracking-widest">
+                    ⚠️ FULL RESET & WIPE
                  </button>
+                 <span class="text-[9px] text-slate-500 font-bold uppercase">Click above if stuck at "Connecting"</span>
             </div>
             
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
@@ -111,7 +111,6 @@
             <div id="loading-spinner" class="mb-4 flex flex-col items-center gap-3">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                 <div class="text-blue-400 font-bold">Connecting to Server...</div>
-                <p class="text-xs text-slate-500 mt-2 px-4 italic">If this takes more than 10 seconds, click the red button above.</p>
             </div>
 
             <div id="lobby-controls" class="space-y-4 hidden">
@@ -185,7 +184,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, collection, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = JSON.parse(__firebase_config);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -225,33 +224,29 @@
             showLobby();
         };
 
-        // EMERGENCY RESET FUNCTION
-        window.forceResetLobby = (btn) => {
-            if(btn) {
-                btn.innerText = "RESETTING NOW...";
-                btn.style.background = "#000";
-            }
+        // EXTREME RESET: Clears storage, signs out, and reloads
+        window.hardResetApp = async () => {
+            const btn = document.getElementById('master-reset');
+            btn.innerText = "WIPING DATA...";
+            btn.style.background = "black";
             
-            // 1. Clear everything local
-            localStorage.clear();
-            sessionStorage.clear();
-            
-            // 2. Try to sign out, but don't wait forever
             try {
-                signOut(auth).catch(() => {});
+                localStorage.clear();
+                sessionStorage.clear();
+                await signOut(auth);
             } catch(e) {}
             
-            // 3. Force reload in 500ms no matter what
             setTimeout(() => {
-                window.location.href = window.location.href;
-                window.location.reload();
-            }, 500);
+                window.location.reload(true);
+            }, 600);
         };
 
         onAuthStateChanged(auth, (u) => {
-            if (u) {
-                user = u;
+            user = u;
+            if (user) {
                 showLobby();
+            } else {
+                initAuth();
             }
         });
 
@@ -264,11 +259,10 @@
                 }
             } catch (err) {
                 console.error("Auth error", err);
+                // Fallback to showing UI even if auth fails, so user can click Reset
                 showLobby();
             }
         };
-
-        initAuth();
 
         const boardOps = [
             ['×', null, '÷', null, '-', null, '+', null], [null, '÷', null, '×', null, '+', null, '-'],
@@ -280,7 +274,7 @@
         const getGameDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id.toString());
 
         window.createGame = async () => {
-            if (!user) return showError("Not authenticated. Use Emergency Reset.");
+            if (!user) return showError("Auth missing. Click Wipe.");
             const btn = document.getElementById('btn-create');
             btn.disabled = true;
             btn.innerText = "Creating...";
@@ -303,7 +297,7 @@
             } catch (e) {
                 btn.disabled = false;
                 btn.innerText = "Create New Game";
-                showError("Room creation failed.");
+                showError("Database error. Try Emergency Wipe.");
             }
         };
 
