@@ -78,15 +78,19 @@
         .history-item { font-family: monospace; padding: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.75rem; }
         #lobby { position: fixed; inset: 0; background: #0f172a; z-index: 200; display: flex; align-items: center; justify-content: center; }
         #winner-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 300; display: none; align-items: center; justify-content: center; backdrop-filter: blur(8px); }
+        .error-overlay { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #ef4444; color: white; padding: 12px 24px; border-radius: 12px; font-weight: bold; z-index: 500; display: none; }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center p-4">
+
+    <div id="error-box" class="error-overlay"></div>
 
     <!-- LOBBY SCREEN -->
     <div id="lobby">
         <div class="bg-slate-800 p-8 rounded-3xl border border-slate-700 shadow-2xl w-full max-w-md text-center">
             <h1 class="text-4xl font-black italic mb-6">DA<span class="text-blue-500">MATH</span> ONLINE</h1>
-            <div class="space-y-4">
+            <div id="loading-spinner" class="mb-4 text-blue-400 font-bold">Connecting to server...</div>
+            <div id="lobby-controls" class="space-y-4 opacity-50 pointer-events-none">
                 <button onclick="createGame()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl font-bold uppercase tracking-wider">Create New Game</button>
                 <div class="flex items-center gap-2">
                     <div class="h-px flex-1 bg-slate-700"></div>
@@ -158,11 +162,55 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = JSON.parse(__firebase_config);
+        const firebaseConfig = {
+            apiKey: "AIzaSyCsauqSlcJ9lVf4dqy9YmWQAZRZ8DQrVBo",
+            authDomain: "damath-ba689.firebaseapp.com",
+            projectId: "damath-ba689",
+            storageBucket: "damath-ba689.firebasestorage.app",
+            messagingSenderId: "37396916011",
+            appId: "1:37396916011:web:1ccbe20b5cbac860f3076e",
+            measurementId: "G-1R8V0ZF5XK"
+        };
+        
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'damath-multiplayer';
+        
+        let currentGameId = null;
+        let myRole = null; 
+        let user = null;
+
+        let localState = {
+            board: [], turn: 'blue', selected: null, validMoves: [],
+            scores: { blue: 0, red: 0 }, history: { blue: [], red: [] },
+            pendingTurnCaptures: [], currentTurnTotal: 0,
+            moveCompleted: false, canContinueJumping: false, gameOver: false,
+            historyStack: [], players: { blue: null, red: null }
+        };
+
+        const showError = (msg) => {
+            const el = document.getElementById('error-box');
+            el.innerText = msg;
+            el.style.display = 'block';
+        };
+
+        // Authentication logic
+        onAuthStateChanged(auth, (u) => {
+            if (u) {
+                user = u;
+                document.getElementById('loading-spinner').style.display = 'none';
+                document.getElementById('lobby-controls').classList.remove('opacity-50', 'pointer-events-none');
+            } else {
+                signInAnonymously(auth).catch(err => {
+                    console.error(err);
+                    if (err.code === 'auth/configuration-not-found') {
+                        showError("Error: Anonymous Sign-in is disabled in Firebase Console.");
+                    } else {
+                        showError("Firebase Error: " + err.message);
+                    }
+                });
+            }
+        });
 
         const boardOps = [
             ['×', null, '÷', null, '-', null, '+', null], [null, '÷', null, '×', null, '+', null, '-'],
@@ -171,28 +219,8 @@
             ['-', null, '+', null, '×', null, '÷', null], [null, '+', null, '-', null, '÷', null, '×']
         ];
 
-        let currentGameId = null;
-        let myRole = null; // 'blue', 'red', or 'observer'
-        let user = null;
-
-        // Game Local State
-        let localState = {
-            board: [], turn: 'blue', selected: null, validMoves: [],
-            scores: { blue: 0, red: 0 }, history: { blue: [], red: [] },
-            pendingTurnCaptures: [], currentTurnEquation: "", currentTurnTotal: 0,
-            moveCompleted: false, canContinueJumping: false, gameOver: false,
-            historyStack: [], players: { blue: null, red: null }
-        };
-
-        // --- Firebase Auth ---
-        onAuthStateChanged(auth, (u) => {
-            user = u;
-            if (!u) signInAnonymously(auth);
-        });
-
-        // --- Lobby Logic ---
         window.createGame = async () => {
-            if (!user) return;
+            if (!user) return showError("Not logged in. Check Firebase auth settings.");
             const id = Math.floor(1000 + Math.random() * 9000).toString();
             const initialBoard = generateInitialBoard();
             const gameData = {
@@ -202,27 +230,35 @@
                 historyStack: [{ board: initialBoard, turn: 'blue', scores: { blue: 0, red: 0 }, history: { blue: [], red: [] } }],
                 status: 'waiting'
             };
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), gameData);
-            startSession(id, 'blue');
+            try {
+                await setDoc(doc(db, 'games', id), gameData);
+                startSession(id, 'blue');
+            } catch (e) {
+                showError("Firestore Permission Error: Check your database rules.");
+            }
         };
 
         window.joinGame = async () => {
             const id = document.getElementById('join-id').value;
             if (!id || !user) return;
-            const snap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id));
-            if (!snap.exists()) {
-                document.getElementById('lobby-status').innerText = "Game not found.";
-                return;
+            try {
+                const snap = await getDoc(doc(db, 'games', id));
+                if (!snap.exists()) {
+                    document.getElementById('lobby-status').innerText = "Game not found.";
+                    return;
+                }
+                const data = snap.data();
+                let role = 'observer';
+                if (data.players.blue === user.uid) role = 'blue';
+                else if (data.players.red === user.uid) role = 'red';
+                else if (!data.players.red) {
+                    role = 'red';
+                    await updateDoc(doc(db, 'games', id), { 'players.red': user.uid, status: 'active' });
+                }
+                startSession(id, role);
+            } catch (e) {
+                showError("Database Error: " + e.message);
             }
-            const data = snap.data();
-            let role = 'observer';
-            if (data.players.blue === user.uid) role = 'blue';
-            else if (data.players.red === user.uid) role = 'red';
-            else if (!data.players.red) {
-                role = 'red';
-                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), { 'players.red': user.uid, status: 'active' });
-            }
-            startSession(id, role);
         };
 
         function startSession(id, role) {
@@ -234,22 +270,19 @@
             document.getElementById('display-player-role').innerText = `Role: ${role}`;
             if (role === 'red') document.getElementById('board').classList.add('board-rotated');
             
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', id), (snap) => {
+            onSnapshot(doc(db, 'games', id), (snap) => {
                 if (snap.exists()) {
                     syncState(snap.data());
                 }
-            }, (err) => console.error("Firestore Error:", err));
+            }, (err) => showError("Sync Error: " + err.message));
         }
 
-        // --- Core Game Logic ---
         function generateInitialBoard() {
             let b = Array(8).fill(null).map(() => Array(8).fill(null));
             const place = (color, val, x, y) => { b[7-y][x] = { color, value: val, isDama: false }; };
-            // Blue
             place('blue', -11, 1, 0); place('blue', 8, 3, 0); place('blue', -5, 5, 0); place('blue', 2, 7, 0);
             place('blue', 0, 0, 1); place('blue', -3, 2, 1); place('blue', 10, 4, 1); place('blue', -7, 6, 1);
             place('blue', -9, 1, 2); place('blue', 6, 3, 2); place('blue', -1, 5, 2); place('blue', 4, 7, 2);
-            // Red
             place('red', -9, 6, 5); place('red', 6, 4, 5); place('red', -1, 2, 5); place('red', 4, 0, 5);
             place('red', 0, 7, 6); place('red', -3, 5, 6); place('red', 10, 3, 6); place('red', -7, 1, 6);
             place('red', -11, 6, 7); place('red', 8, 4, 7); place('red', -5, 2, 7); place('red', 2, 0, 7);
@@ -263,8 +296,6 @@
             localState.history = data.history;
             localState.historyStack = data.historyStack;
             localState.players = data.players;
-            
-            // Clear selections when turn changes remotely
             if (!localState.moveCompleted) {
                 localState.selected = null;
                 localState.validMoves = [];
@@ -274,7 +305,7 @@
 
         async function updateRemote() {
             if (!currentGameId) return;
-            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), {
+            await updateDoc(doc(db, 'games', currentGameId), {
                 board: localState.board,
                 turn: localState.turn,
                 scores: localState.scores,
@@ -317,7 +348,6 @@
             localState.board[tr][tc] = piece;
             localState.board[localState.selected.r][localState.selected.c] = null;
             localState.selected = { r: tr, c: tc };
-            
             const nextJumps = getValidMoves(tr, tc, true);
             localState.moveCompleted = true;
             localState.canContinueJumping = nextJumps.length > 0;
@@ -330,19 +360,14 @@
             if (piece && ((localState.turn === 'blue' && localState.selected.r === 0) || (localState.turn === 'red' && localState.selected.r === 7))) {
                 piece.isDama = true;
             }
-
             if (localState.pendingTurnCaptures.length > 0) {
                 localState.history[localState.turn].push(...localState.pendingTurnCaptures);
             }
             localState.scores[localState.turn] += localState.currentTurnTotal;
             localState.turn = localState.turn === 'blue' ? 'red' : 'blue';
-            
-            // Clean local turn state
             localState.selected = null; localState.validMoves = [];
             localState.pendingTurnCaptures = []; localState.currentTurnTotal = 0;
             localState.moveCompleted = false; localState.canContinueJumping = false;
-
-            // Update stack
             const snap = { 
                 board: localState.board.map(r => r.map(c => c ? {...c} : null)), 
                 turn: localState.turn, 
@@ -351,7 +376,6 @@
             };
             localState.historyStack.push(snap);
             if (localState.historyStack.length > 50) localState.historyStack.shift();
-
             await updateRemote();
         };
 
@@ -383,7 +407,6 @@
             const all = [[-1,-1], [-1,1], [1,-1], [1,1]];
             const fwd = piece.color === 'blue' ? [[-1,-1], [-1,1]] : [[1,-1], [1,1]];
             const dirs = piece.isDama ? all : fwd;
-
             all.forEach(([dr, dc]) => {
                 let nr = r + dr, nc = c + dc, jr = r + dr*2, jc = c + dc*2;
                 if (jr >= 0 && jr < 8 && jc >= 0 && jc < 8) {
@@ -436,16 +459,13 @@
             document.getElementById('score-red').innerText = localState.scores.red.toFixed(1).replace('.0', '');
             document.getElementById('player-blue').classList.toggle('active-turn', localState.turn === 'blue');
             document.getElementById('player-red').classList.toggle('active-turn', localState.turn === 'red');
-            
             ['blue', 'red'].forEach(c => {
                 const hEl = document.getElementById(`history-${c}`);
                 hEl.innerHTML = localState.history[c].map(item => `<div class="history-item">${item}</div>`).join('');
                 hEl.scrollTop = hEl.scrollHeight;
             });
-
             const status = document.getElementById('last-op');
             const pStatus = document.getElementById('player-status');
-            
             if (localState.turn === myRole) {
                 status.innerText = localState.moveCompleted ? "Confirm End Turn" : "Your Turn";
                 status.className = "text-green-400 font-mono font-bold animate-pulse";
@@ -455,7 +475,6 @@
                 status.className = "text-slate-500 font-mono font-bold";
                 pStatus.innerText = `You are ${myRole}`;
             }
-
             document.getElementById('btn-done').classList.toggle('hidden', localState.turn !== myRole || !localState.moveCompleted);
             document.getElementById('btn-undo').classList.toggle('hidden', localState.turn !== myRole || localState.historyStack.length <= 1);
         }
