@@ -353,6 +353,8 @@
                 panelRed.style.order = 3;
             }
             
+            let isFirstSnapshot = true; // Tracks the initial load to prevent modal spam on refresh
+            
             if (unsub) unsub();
             unsub = onSnapshot(getGameRef(id), (snap) => {
                 if (snap.exists()) {
@@ -371,8 +373,12 @@
                         gameState.historyStack = [];
                     }
 
-                    // Check for Winner Declaration
-                    if (gameState.lastWinner && gameState.lastWinner.time !== lastSeenWinnerTime) {
+                    // Check for Winner Declaration securely
+                    if (isFirstSnapshot) {
+                        // Prevent winner modal from showing just because you refreshed the page
+                        lastSeenWinnerTime = gameState.lastWinner?.time || null;
+                        isFirstSnapshot = false;
+                    } else if (gameState.lastWinner && gameState.lastWinner.time !== lastSeenWinnerTime) {
                         lastSeenWinnerTime = gameState.lastWinner.time;
                         // Fully reset local state to accept fresh board
                         turnBoard = null; selected = null; moves = []; tempScore = 0; tempLogs = []; jumpChain = false;
@@ -758,6 +764,12 @@
             };
 
             const initialBoard = generateBoard();
+            const currentTime = Date.now();
+
+            // OPTIMISTIC UPDATE: Show modal immediately locally before database finishes!
+            lastSeenWinnerTime = currentTime; 
+            turnBoard = null; selected = null; moves = []; tempScore = 0; tempLogs = []; jumpChain = false;
+            showWinnerModal(winner);
 
             try {
                 await updateDoc(getGameRef(roomId), {
@@ -766,10 +778,10 @@
                     scores: { blue: 0, red: 0 },
                     history: { blue: [], red: [] },
                     historyStack: "[]",
-                    lastAction: Date.now(),
+                    lastAction: currentTime,
                     liveState: null,
                     matchWins: newMatchWins,
-                    lastWinner: { role: winner, time: Date.now() }
+                    lastWinner: { role: winner, time: currentTime }
                 });
             } catch (e) {
                 alert("Network error starting new match.");
