@@ -98,6 +98,18 @@
         </div>
     </div>
 
+    <!-- NEW MATCH REQUEST MODAL -->
+    <div id="new-match-request-modal" class="fixed inset-0 bg-slate-950/80 z-[250] hidden items-center justify-center p-6 backdrop-blur-sm">
+        <div class="bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl w-full max-w-sm text-center">
+            <h2 class="text-2xl font-black mb-4 text-white">NEW MATCH REQUEST</h2>
+            <p class="text-slate-400 text-sm mb-8">Blue wants to end this match and declare a winner based on current scores. Do you agree?</p>
+            <div class="space-y-3">
+                <button onclick="acceptNewMatch()" class="w-full py-3 bg-green-600 hover:bg-green-500 rounded-xl font-bold transition-all shadow-lg">Yes, Start New Match</button>
+                <button onclick="declineNewMatch()" class="w-full py-3 bg-red-600 hover:bg-red-500 rounded-xl font-bold transition-all shadow-lg">No, Continue Playing</button>
+            </div>
+        </div>
+    </div>
+
     <!-- WINNER MODAL -->
     <div id="winner-modal" class="fixed inset-0 bg-slate-950/90 z-[300] hidden items-center justify-center p-6 backdrop-blur-md">
         <div class="bg-slate-900 p-10 rounded-3xl border-4 border-yellow-500 text-center max-w-md w-full shadow-2xl shadow-yellow-500/20 transform transition-all scale-100">
@@ -295,7 +307,8 @@
                 historyStack: "[]",
                 players: { blue: user.uid, red: null },
                 lastAction: Date.now(),
-                liveState: null
+                liveState: null,
+                newMatchRequest: null // Tracks if a new match has been requested
             };
             try {
                 await setDoc(getGameRef(id), data);
@@ -371,6 +384,42 @@
                         gameState.historyStack = JSON.parse(gameState.historyStack);
                     } else if (!gameState.historyStack) {
                         gameState.historyStack = [];
+                    }
+
+                    // Handle New Match Requests
+                    const reqModal = document.getElementById('new-match-request-modal');
+                    const btnNewGame = document.getElementById('btn-new-game');
+
+                    if (gameState.newMatchRequest === 'pending') {
+                        if (myRole === 'red') {
+                            reqModal.classList.remove('hidden');
+                            reqModal.classList.add('flex');
+                        } else if (myRole === 'blue' && btnNewGame) {
+                            btnNewGame.innerText = "WAITING FOR P2...";
+                            btnNewGame.classList.add('opacity-50', 'pointer-events-none');
+                        }
+                    } else if (gameState.newMatchRequest === 'declined') {
+                        if (myRole === 'red') {
+                            reqModal.classList.add('hidden');
+                            reqModal.classList.remove('flex');
+                        } else if (myRole === 'blue') {
+                            alert("Red declined the new match request. Continuing game.");
+                            updateDoc(getGameRef(roomId), { newMatchRequest: null }).catch(()=>{});
+                            if (btnNewGame) {
+                                btnNewGame.innerText = "↻ NEW MATCH";
+                                btnNewGame.classList.remove('opacity-50', 'pointer-events-none');
+                            }
+                        }
+                    } else {
+                        // Null or accepted
+                        if (reqModal) {
+                            reqModal.classList.add('hidden');
+                            reqModal.classList.remove('flex');
+                        }
+                        if (myRole === 'blue' && btnNewGame) {
+                            btnNewGame.innerText = "↻ NEW MATCH";
+                            btnNewGame.classList.remove('opacity-50', 'pointer-events-none');
+                        }
                     }
 
                     // Check for Winner Declaration securely
@@ -737,20 +786,52 @@
         document.getElementById('btn-join').onclick = () => window.joinGame();
         
         // NEW MATCH HANDLING
-        window.promptNewGame = () => {
+        window.promptNewGame = async () => {
             if (!gameState || myRole !== 'blue') return;
-            if (confirm("End this match and start a new one? A winner will be declared based on the current scores.")) {
-                triggerNewGame();
+            if (!gameState.players.red) return alert("You cannot request a new match until Player 2 joins.");
+            
+            if (confirm("Send a request to Player 2 to end this match and declare a winner based on the current scores?")) {
+                const btnNewGame = document.getElementById('btn-new-game');
+                btnNewGame.innerText = "SENDING...";
+                btnNewGame.classList.add('opacity-50', 'pointer-events-none');
+
+                try {
+                    await updateDoc(getGameRef(roomId), { newMatchRequest: 'pending' });
+                } catch (e) {
+                    alert("Network error sending request.");
+                    btnNewGame.innerText = "↻ NEW MATCH";
+                    btnNewGame.classList.remove('opacity-50', 'pointer-events-none');
+                }
+            }
+        };
+
+        window.acceptNewMatch = () => {
+            const reqModal = document.getElementById('new-match-request-modal');
+            reqModal.classList.add('hidden');
+            reqModal.classList.remove('flex');
+            triggerNewGame(); // Triggers the actual reset
+        };
+
+        window.declineNewMatch = async () => {
+            const reqModal = document.getElementById('new-match-request-modal');
+            reqModal.classList.add('hidden');
+            reqModal.classList.remove('flex');
+            try {
+                await updateDoc(getGameRef(roomId), { newMatchRequest: 'declined' });
+            } catch(e) {
+                console.error("Failed to decline", e);
             }
         };
 
         window.triggerNewGame = async () => {
-            if (isCommitting || !gameState || myRole !== 'blue') return;
+            if (isCommitting || !gameState) return;
             isCommitting = true;
 
             const btnNewGame = document.getElementById('btn-new-game');
-            btnNewGame.innerText = "STARTING...";
-            btnNewGame.classList.add('opacity-50', 'pointer-events-none');
+            if (btnNewGame) {
+                btnNewGame.innerText = "STARTING...";
+                btnNewGame.classList.add('opacity-50', 'pointer-events-none');
+            }
 
             // Calculate winner
             let winner = 'tie';
@@ -781,14 +862,17 @@
                     lastAction: currentTime,
                     liveState: null,
                     matchWins: newMatchWins,
-                    lastWinner: { role: winner, time: currentTime }
+                    lastWinner: { role: winner, time: currentTime },
+                    newMatchRequest: null // Clear the pending request flag
                 });
             } catch (e) {
                 alert("Network error starting new match.");
             } finally {
                 isCommitting = false;
-                btnNewGame.innerText = "↻ NEW MATCH";
-                btnNewGame.classList.remove('opacity-50', 'pointer-events-none');
+                if (btnNewGame) {
+                    btnNewGame.innerText = "↻ NEW MATCH";
+                    btnNewGame.classList.remove('opacity-50', 'pointer-events-none');
+                }
             }
         };
 
