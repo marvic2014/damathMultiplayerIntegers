@@ -345,7 +345,7 @@
             }
         }, 3000);
 
-        // RESTORED: Strict database path required to successfully create and save matches
+        // STRICT DATABASE PATH: Guarantees creation success inside restricted environments
         const getGameRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
 
         window.createGame = async () => {
@@ -389,7 +389,8 @@
                 localStorage.setItem('last_room', id);
                 enterRoom(id, 'blue');
             } catch (e) {
-                alert("Failed to create match. Missing database permissions.");
+                console.error("Create Match Error:", e);
+                alert("Failed to create match. Check your connection or database permissions.");
             }
         };
 
@@ -424,6 +425,10 @@
                 alert("Permission denied while trying to join room.");
             }
         };
+
+        // FIX: Reconnecting the Lobby buttons!
+        document.getElementById('btn-create').onclick = window.createGame;
+        document.getElementById('btn-join').onclick = window.joinGame;
 
         window.issueWarning = async (type) => {
             if (isCommitting || !gameState) return;
@@ -820,6 +825,7 @@
                     const isPlayable = (r + c) % 2 === 0;
                     sq.className = `square ${isPlayable ? 'light' : 'dark'}`;
                     
+                    // Always show mathematical operators visually
                     const op = boardOps[r][c];
                     if (op && isPlayable) {
                         sq.innerHTML = `<span class="operator">${op}</span>`;
@@ -1231,6 +1237,7 @@
                             btn.classList.add('opacity-50', 'pointer-events-none');
                         }
                     }
+
                     await deleteDoc(getGameRef(roomId));
                 } catch(e) {
                     console.error("Failed to destroy room:", e);
@@ -1274,6 +1281,7 @@
                 render();
             }
         };
+        document.getElementById('btn-global-undo').onclick = window.globalUndo;
 
         window.undoLocal = () => {
             if (isCommitting || !gameState || gameState.turn !== myRole) return; 
@@ -1281,6 +1289,7 @@
             pushLiveState(); 
             render();
         };
+        document.getElementById('btn-undo').onclick = window.undoLocal;
 
         window.commitTurn = async () => {
             if (isCommitting || !gameState || gameState.turn !== myRole) return; 
@@ -1347,6 +1356,7 @@
                 render();
             }
         };
+        document.getElementById('btn-commit').onclick = window.commitTurn;
 
     </script>
 </body>
