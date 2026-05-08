@@ -345,7 +345,8 @@
             }
         }, 3000);
 
-        const getGameRef = (id) => doc(db, 'games', id);
+        // RESTORED: Strict database path required to successfully create and save matches
+        const getGameRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'games', id);
 
         window.createGame = async () => {
             if (!user) return alert("Not authenticated.");
