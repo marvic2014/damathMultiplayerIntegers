@@ -163,6 +163,7 @@
         <div class="flex justify-between items-center mb-8 relative">
             <div class="flex gap-2">
                 <button onclick="promptExit()" class="text-xs font-bold text-slate-500 hover:text-white transition-colors px-4 py-2 bg-slate-800 rounded-lg">← EXIT ROOM</button>
+                <button id="btn-surrender" onclick="promptSurrender()" class="text-xs font-bold text-red-400 hover:text-red-300 transition-colors px-4 py-2 bg-slate-800 rounded-lg hidden border border-red-900/50 shadow-[0_0_10px_rgba(248,113,113,0.1)]">🏳 SURRENDER</button>
                 <button id="btn-new-game" onclick="promptNewGame()" class="text-xs font-bold text-green-400 hover:text-green-300 transition-colors px-4 py-2 bg-slate-800 rounded-lg hidden border border-green-900/50 shadow-[0_0_10px_rgba(74,222,128,0.1)]">↻ NEW MATCH</button>
                 <button id="btn-global-undo" class="text-xs font-bold text-orange-400 hover:text-orange-300 transition-colors px-4 py-2 bg-slate-800 rounded-lg hidden">↶ REVERT LAST TURN</button>
             </div>
@@ -513,19 +514,31 @@
                 const turnTimerBlue = document.getElementById('turn-timer-blue');
                 const turnTimerRed = document.getElementById('turn-timer-red');
                 
-                turnTimerBlue.classList.toggle('hidden', gameState.turn !== 'blue');
-                turnTimerRed.classList.toggle('hidden', gameState.turn !== 'red');
+                // Show both timers persistently
+                turnTimerBlue.classList.remove('hidden', 'text-red-400', 'text-red-500', 'text-slate-600', 'animate-ping');
+                turnTimerRed.classList.remove('hidden', 'text-red-400', 'text-red-500', 'text-slate-600', 'animate-ping');
                 
                 const tSec = Math.floor(turnLeft / 1000);
-                const activeTimerEl = gameState.turn === 'blue' ? turnTimerBlue : turnTimerRed;
-                activeTimerEl.innerText = tSec.toString().padStart(2, '0');
+                const maxSec = Math.floor(gameState.settings.turnDurationMs / 1000);
+                const maxSecStr = maxSec.toString().padStart(2, '0');
+                const tSecStr = tSec.toString().padStart(2, '0');
 
-                if (tSec <= 10) {
-                    activeTimerEl.classList.add('text-red-500', 'animate-ping');
-                    activeTimerEl.classList.remove('text-white');
+                if (gameState.turn === 'blue') {
+                    turnTimerBlue.innerText = tSecStr;
+                    turnTimerRed.innerText = maxSecStr;
+                    
+                    if (tSec <= 10) turnTimerBlue.classList.add('text-red-500', 'animate-ping');
+                    else turnTimerBlue.classList.add('text-red-400');
+                    
+                    turnTimerRed.classList.add('text-slate-600');
                 } else {
-                    activeTimerEl.classList.remove('text-red-500', 'animate-ping');
-                    activeTimerEl.classList.add('text-white');
+                    turnTimerRed.innerText = tSecStr;
+                    turnTimerBlue.innerText = maxSecStr;
+                    
+                    if (tSec <= 10) turnTimerRed.classList.add('text-red-500', 'animate-ping');
+                    else turnTimerRed.classList.add('text-red-400');
+                    
+                    turnTimerBlue.classList.add('text-slate-600');
                 }
 
                 if (matchLeft === 0) {
@@ -777,6 +790,7 @@
             
             const btnGlobalUndo = document.getElementById('btn-global-undo');
             const btnNewGame = document.getElementById('btn-new-game');
+            const btnSurrender = document.getElementById('btn-surrender');
             
             if (btnGlobalUndo) {
                 if (gameState.historyStack && gameState.historyStack.length > 0) {
@@ -791,6 +805,14 @@
                     btnNewGame.classList.remove('hidden');
                 } else {
                     btnNewGame.classList.add('hidden');
+                }
+            }
+            
+            if (btnSurrender) {
+                if (myRole === 'blue' || myRole === 'red') {
+                    btnSurrender.classList.remove('hidden');
+                } else {
+                    btnSurrender.classList.add('hidden');
                 }
             }
             
@@ -1116,6 +1138,67 @@
             }
         };
 
+        window.promptSurrender = async () => {
+            if (!gameState || (myRole !== 'blue' && myRole !== 'red')) return;
+            if (!gameState.players.red) return alert("You cannot surrender before the match starts.");
+            
+            if (confirm("Are you sure you want to surrender? You will instantly lose the match.")) {
+                triggerSurrender();
+            }
+        };
+
+        window.triggerSurrender = async () => {
+            if (isCommitting || !gameState) return;
+            isCommitting = true;
+
+            const btnSurrender = document.getElementById('btn-surrender');
+            if (btnSurrender) {
+                btnSurrender.innerText = "SURRENDERING...";
+                btnSurrender.classList.add('opacity-50', 'pointer-events-none');
+            }
+
+            const winner = myRole === 'blue' ? 'red' : 'blue';
+
+            const newMatchWins = { 
+                blue: (gameState.matchWins?.blue || 0) + (winner === 'blue' ? 1 : 0),
+                red: (gameState.matchWins?.red || 0) + (winner === 'red' ? 1 : 0)
+            };
+
+            const version = gameState.settings?.version || 'integer';
+            const initialBoard = generateBoard(version);
+            const currentTime = Date.now();
+
+            lastSeenWinnerTime = currentTime; 
+            turnBoard = null; selected = null; moves = []; tempScore = 0; tempLogs = []; jumpChain = false;
+            showWinnerModal(winner, 'surrender');
+
+            try {
+                await updateDoc(getGameRef(roomId), {
+                    board: JSON.stringify(initialBoard),
+                    turn: 'blue',
+                    scores: { blue: 0, red: 0 },
+                    history: { blue: [], red: [] },
+                    historyStack: "[]",
+                    lastAction: currentTime,
+                    liveState: null,
+                    matchWins: newMatchWins,
+                    warnings: { blue: 0, red: 0 },
+                    lastWinner: { role: winner, time: currentTime, reason: 'surrender' },
+                    newMatchRequest: null,
+                    gameStartTime: currentTime, 
+                    turnStartTime: currentTime
+                });
+            } catch (e) {
+                alert("Network error processing surrender.");
+            } finally {
+                isCommitting = false;
+                if (btnSurrender) {
+                    btnSurrender.innerText = "🏳 SURRENDER";
+                    btnSurrender.classList.remove('opacity-50', 'pointer-events-none');
+                }
+            }
+        };
+
         window.triggerNewGame = async (reason = 'standard') => {
             if (isCommitting || !gameState) return;
             isCommitting = true;
@@ -1190,6 +1273,8 @@
                 reasonEl.innerText = "OPPONENT REACHED 3 WARNINGS";
             } else if (reason === 'timeout') {
                 reasonEl.innerText = "MATCH TIME ELAPSED";
+            } else if (reason === 'surrender') {
+                reasonEl.innerText = "OPPONENT SURRENDERED";
             } else {
                 reasonEl.innerText = "MATCH COMPLETED";
             }
