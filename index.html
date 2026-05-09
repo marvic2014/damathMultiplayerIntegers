@@ -701,8 +701,8 @@
                     blueVals = ['-9/10', '6/10', '-1/10', '4/10', '0', '-3/10', '10/10', '-7/10', '-11/10', '8/10', '-5/10', '2/10'];
                     break;
                 case 'radical':
-                    redVals = ['144√8', 100√2', '-81√32', '-121√18', '64√2', '36√32', '-28√18', '-49√18', '16√32', '4√18', '-1√8', '-9√2'];
                     blueVals = ['-9√2', '-1√8', '4√18', '16√32', '-49√18', '-28√18', '36√32', '64√2', '-121√18', '-81√32', '100√2', '144√8'];
+                    redVals = [...blueVals].reverse();
                     break;
                 case 'polynomial':
                     redVals = ['2x', '-5y', '8x', '-11y', '-7x', '10y', '-3x', '0', '4y', '-x', '6y', '-9x'];
@@ -737,10 +737,17 @@
                 return parseFloat(n) / parseFloat(d);
             }
             if (v.includes('√')) {
-                const numStr = v.replace('√', '').replace('-', '');
-                const num = parseFloat(numStr) || 0;
-                const sign = v.startsWith('-') ? -1 : 1;
-                return sign * Math.sqrt(num);
+                const parts = v.split('√');
+                let multiplierStr = parts[0].trim();
+                let radicandStr = parts[1].trim();
+
+                let multiplier = 1;
+                if (multiplierStr === '-') multiplier = -1;
+                else if (multiplierStr !== '') multiplier = parseFloat(multiplierStr);
+
+                let radicand = parseFloat(radicandStr) || 0;
+
+                return multiplier * Math.sqrt(radicand);
             }
             if (v.includes('x') || v.includes('y')) {
                 // Base variable evaluations (e.g. x=1, y=1) to yield clean numeric scores
